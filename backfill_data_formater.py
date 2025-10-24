@@ -198,15 +198,31 @@ if __name__ == "__main__":
             if not valid_input_file:
                 print("Please try again.\n")
 
-    # Get output directory (default: current working directory)
+    # Get output directory (default: same directory as input file)
     if args and args.output:
         outputdirname = args.output
         if not os.path.exists(outputdirname):
             print(f"Creating output directory: {outputdirname}")
             os.makedirs(outputdirname)
     else:
-        # Default to current working directory
-        outputdirname = os.getcwd()
+        # Default to same directory as input file
+        default_output = os.path.dirname(os.path.abspath(input_filepath))
+
+        # In interactive mode, ask if user wants different output directory
+        if not args:
+            print(f"\nDefault output directory: {default_output}")
+            use_different = input("Use a different output directory? (y/N): ").strip().lower()
+
+            if use_different in ['y', 'yes']:
+                outputdirname = input("Enter output directory path: ").strip()
+                if not os.path.exists(outputdirname):
+                    print(f"Creating output directory: {outputdirname}")
+                    os.makedirs(outputdirname)
+            else:
+                outputdirname = default_output
+        else:
+            outputdirname = default_output
+
         print(f"Output directory: {outputdirname}")
 
     # Process the file
