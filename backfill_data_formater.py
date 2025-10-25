@@ -171,7 +171,11 @@ def read_data_file(filepath):
             try:
                 # Only process non-null values, remove commas, then try to convert to numeric
                 cleaned = df[col].str.replace(',', '', regex=False)
-                df[col] = pd.to_numeric(cleaned, errors='ignore')
+                try:
+                    df[col] = pd.to_numeric(cleaned)
+                except (ValueError, TypeError):
+                    # If conversion fails, keep original values
+                    pass
             except (AttributeError, TypeError):
                 # Skip columns that don't support string operations
                 pass
