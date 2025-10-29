@@ -255,6 +255,37 @@ def pivot_flat_file(input_path):
             output_unit_path = os.path.join(newpath, f'{building}_'+f'{device}'+'_units.csv')
             unit_table.to_csv(output_unit_path, index=False, quoting=csv.QUOTE_NONNUMERIC)
             logging.info('Output Unit File Path: '+ output_unit_path)
+
+            # Create run_command.txt file with the command template
+            command_template = (
+                f'-- PRE MANGO --\n\n'
+                f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
+                f'--data_file="{output_path}" '
+                f'--unit_file="{output_unit_path}" '
+                f'--mode="populate" '
+                f'--api_key="" '
+                f'--topic=projects/google.com:datalake/topics/replay ' 
+                f'--gcp_project_id=google.com:datalake '
+                f'--device_num_id= '
+                f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com'
+                
+                f'-- POST MANGO --\n\n'
+                f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
+                f'--data_file="{output_path}" '
+                f'--unit_file="{output_unit_path}" '
+                f'--mode="populate" '
+                f'--api_key="" '
+                f'--topic=projects/google.com:datalake/topics/replay '
+                f'--gcp_project_id=google.com:datalake '
+                f'--device_num_id= '
+                f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com ' f'--data_field_name="points" '
+                f'--present_value_field_name="present_value"'
+            )
+            run_command_path = os.path.join(newpath, 'run_command.txt')
+            with open(run_command_path, 'w') as cmd_file:
+                cmd_file.write(command_template)
+            logging.info('Run Command File Path: '+ run_command_path)
+
             unmatched_units = unit_table[unit_table['Units'].isnull()]
             field_list = ', '.join(unmatched_units['Field Name'])
             if not unmatched_units.empty:
