@@ -9,8 +9,39 @@ import datetime
 import csv
 import pytz
 import openpyxl
- 
+
 dirname = os.path.dirname(os.path.abspath(__file__))
+
+def get_api_key():
+    """
+    Get API key from .api_key file, or prompt user if it doesn't exist.
+    The .api_key file is gitignored to prevent committing secrets.
+    """
+    api_key_path = os.path.join(dirname, '.api_key')
+
+    if os.path.exists(api_key_path):
+        # Read existing API key
+        with open(api_key_path, 'r') as f:
+            return f.read().strip()
+
+    # First time setup - prompt for API key
+    print("\n" + "=" * 60)
+    print("FIRST TIME SETUP")
+    print("=" * 60)
+    print("Please provide your API key. This will be saved locally")
+    print("and will NOT be committed to git (.api_key is gitignored).")
+    print("=" * 60)
+
+    api_key = input("\nEnter your API key: ").strip()
+
+    # Save API key to file
+    with open(api_key_path, 'w') as f:
+        f.write(api_key)
+
+    print(f"\n✓ API key saved to: {api_key_path}")
+    print("=" * 60 + "\n")
+
+    return api_key
  
 unit_df = pd.DataFrame({'pointName':['Current', 'Current_A', 'Current_B', 'Current_C', 'Frequency', 'PF', 'PF_A', 'PF_B', 'PF_C', 'Volts_AB', 'Volts_AN', 'Volts_BC', 'Volts_BN', 'Volts_CA', 'Volts_CN', 'Volts_LL', 'Volts_LN', 'kVAR_Demand', 'kVA_Demand', 'kVAR', 'kVA', 'kW', 'kW_A', 'kW_B', 'kW_C', 'kWh','Temperature','GasFlowRate_Unscaled','GasFlowTotal_Unscaled','WaterFlowTotal','WaterFlowRate','kWh_rec','water_volume_accumulator'], 'Units':['amperes', 'amperes', 'amperes', 'amperes', 'hertz', 'no-units', 'no-units', 'no-units', 'no-units', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'kilovolt-amperes-reactive', 'kilovolt-amperes', 'kilovolt-amperes-reactive', 'kilovolt-amperes', 'kilowatts', 'kilowatts', 'kilowatts', 'kilowatts', 'kilowatt-hours','degrees-fahrenheit','cubic-feet-per-hour','cubic-feet','us-gallons','us-gallons-per-minute','kilowatts','us-gallons']})
 
@@ -257,28 +288,30 @@ def pivot_flat_file(input_path):
             logging.info('Output Unit File Path: '+ output_unit_path)
 
             # Create run_command.txt file with the command template
+            api_key = get_api_key()
             command_template = (
                 f'-- PRE MANGO --\n\n'
                 f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
                 f'--data_file="{output_path}" '
                 f'--unit_file="{output_unit_path}" '
                 f'--mode="populate" '
-                f'--api_key="" '
-                f'--topic=projects/google.com:datalake/topics/replay ' 
+                f'--api_key="{api_key}" '
+                f'--topic=projects/google.com:datalake/topics/replay '
                 f'--gcp_project_id=google.com:datalake '
                 f'--device_num_id= '
-                f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com'
-                
+                f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com\n\n'
+
                 f'-- POST MANGO --\n\n'
                 f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
                 f'--data_file="{output_path}" '
                 f'--unit_file="{output_unit_path}" '
                 f'--mode="populate" '
-                f'--api_key="" '
+                f'--api_key="{api_key}" '
                 f'--topic=projects/google.com:datalake/topics/replay '
                 f'--gcp_project_id=google.com:datalake '
                 f'--device_num_id= '
-                f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com ' f'--data_field_name="points" '
+                f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com '
+                f'--data_field_name="points" '
                 f'--present_value_field_name="present_value"'
             )
             run_command_path = os.path.join(newpath, 'run_command.txt')
