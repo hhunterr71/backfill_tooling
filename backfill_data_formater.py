@@ -43,7 +43,7 @@ def get_api_key():
 
     return api_key
  
-unit_df = pd.DataFrame({'pointName':['Current', 'Current_A', 'Current_B', 'Current_C', 'Frequency', 'PF', 'PF_A', 'PF_B', 'PF_C', 'Volts_AB', 'Volts_AN', 'Volts_BC', 'Volts_BN', 'Volts_CA', 'Volts_CN', 'Volts_LL', 'Volts_LN', 'kVAR_Demand', 'kVA_Demand', 'kVAR', 'kVA', 'kW', 'kW_A', 'kW_B', 'kW_C', 'kWh','Temperature','GasFlowRate_Unscaled','GasFlowTotal_Unscaled','WaterFlowTotal','WaterFlowRate','kWh_rec','water_volume_accumulator'], 'Units':['amperes', 'amperes', 'amperes', 'amperes', 'hertz', 'no-units', 'no-units', 'no-units', 'no-units', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'kilovolt-amperes-reactive', 'kilovolt-amperes', 'kilovolt-amperes-reactive', 'kilovolt-amperes', 'kilowatts', 'kilowatts', 'kilowatts', 'kilowatts', 'kilowatt-hours','degrees-fahrenheit','cubic-feet-per-hour','cubic-feet','us-gallons','us-gallons-per-minute','kilowatts','us-gallons']})
+unit_df = pd.DataFrame({'pointName':['Current', 'Current_A', 'Current_B', 'Current_C', 'Frequency', 'PF', 'PF_A', 'PF_B', 'PF_C', 'Volts_AB', 'Volts_AN', 'Volts_BC', 'Volts_BN', 'Volts_CA', 'Volts_CN', 'Volts_LL', 'Volts_LN', 'kVAR_Demand', 'kVA_Demand', 'kVAR', 'kVA', 'kW', 'kW_A', 'kW_B', 'kW_C', 'kWh','Temperature','GasFlowRate_Unscaled','GasFlowTotal_Unscaled','WaterFlowTotal','WaterFlowRate','kWh_rec','water_volume_accumulator','energy_accumulator'], 'Units':['amperes', 'amperes', 'amperes', 'amperes', 'hertz', 'no-units', 'no-units', 'no-units', 'no-units', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'kilovolt-amperes-reactive', 'kilovolt-amperes', 'kilovolt-amperes-reactive', 'kilovolt-amperes', 'kilowatts', 'kilowatts', 'kilowatts', 'kilowatts', 'kilowatt-hours','degrees-fahrenheit','cubic-feet-per-hour','cubic-feet','us-gallons','us-gallons-per-minute','kilowatts','us-gallons','kilowatt-hours']})
 
 # Custom exception for reset functionality
 class ResetException(Exception):
@@ -271,13 +271,34 @@ def pivot_flat_file(input_path):
 
             if not os.path.exists(newpath):
                 os.makedirs(newpath)
-                logging.basicConfig(filename = os.path.join(newpath, 'backfill_log.log'), encoding = 'utf-8', level = logging.DEBUG)
-                logging.info('Input File Path: '+ os.path.join(dirname, input_path))
-                logging.info('Action Performed: Pivoting and Timestamp Formatting')
+
+            # Create a unique logger for this building/device combination
+            logger_name = f'{building}_{device}_{start_date}_{end_date}'
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.DEBUG)
+
+            # Remove any existing handlers to avoid duplicates
+            logger.handlers.clear()
+
+            # Create file handler for this specific log file
+            log_file_path = os.path.join(newpath, 'backfill_log.log')
+            file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+            file_handler.setLevel(logging.DEBUG)
+
+            # Create formatter and add it to the handler
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+
+            # Add handler to logger
+            logger.addHandler(file_handler)
+
+            # Log initial information
+            logger.info('Input File Path: '+ os.path.join(dirname, input_path))
+            logger.info('Action Performed: Pivoting and Timestamp Formatting')
 
             output_path = os.path.join(newpath, f'{building}_{device}.csv')
             table.to_csv(output_path, index=False, quoting=csv.QUOTE_NONNUMERIC, float_format='%.10g')
-            logging.info('Output File Path: '+ output_path + ', Date Range: '+ start_date + ' to ' + end_date)
+            logger.info('Output File Path: '+ output_path + ', Date Range: '+ start_date + ' to ' + end_date)
 
             # Create unit file
             a_df = df_single.drop_duplicates(['device','pointName'])[['device','pointName']]
@@ -285,7 +306,7 @@ def pivot_flat_file(input_path):
             unit_table = unit_table.rename({'device':'Device Id', 'pointName':'Field Name'}, axis="columns")
             output_unit_path = os.path.join(newpath, f'{building}_'+f'{device}'+'_units.csv')
             unit_table.to_csv(output_unit_path, index=False, quoting=csv.QUOTE_NONNUMERIC)
-            logging.info('Output Unit File Path: '+ output_unit_path)
+            logger.info('Output Unit File Path: '+ output_unit_path)
 
             # Create run_command.txt file with the command template
             api_key = get_api_key()
@@ -317,13 +338,17 @@ def pivot_flat_file(input_path):
             run_command_path = os.path.join(newpath, 'run_command.txt')
             with open(run_command_path, 'w') as cmd_file:
                 cmd_file.write(command_template)
-            logging.info('Run Command File Path: '+ run_command_path)
+            logger.info('Run Command File Path: '+ run_command_path)
 
             unmatched_units = unit_table[unit_table['Units'].isnull()]
             field_list = ', '.join(unmatched_units['Field Name'])
             if not unmatched_units.empty:
-                logging.warning('The following field(s) is not recognized: '+ field_list + '. Please review and add units if the field(s) is valid.')
+                logger.warning('The following field(s) is not recognized: '+ field_list + '. Please review and add units if the field(s) is valid.')
                 print('WARNING: The following field(s) is not recognized: '+ field_list + '. Please review and add units if the field(s) is valid.')
+
+            # Close the file handler to ensure logs are written properly
+            file_handler.close()
+            logger.removeHandler(file_handler)
 
     except KeyError as e:
         raise ValueError(f"Column error during pivot operation: {str(e)}")
