@@ -38,21 +38,32 @@ pip install pandas openpyxl
 
 The input file must be a flat CSV or XLSX file with the following columns:
 
-| Column | Description |
-|--------|-------------|
-| `building` | Building identifier (e.g., "US-MTV-1708") |
-| `device` | Device identifier (e.g., "MAIN_device") |
-| `timestamp` | ISO8601 formatted timestamp |
-| `pointName` | Measurement point name (e.g., "kW", "Temperature") |
-| `value` | Numeric measurement value |
+| Column | Required | Description |
+|--------|----------|-------------|
+| `building` | Yes | Building identifier (e.g., "US-MTV-1708") |
+| `device` | Yes | Device identifier (e.g., "MAIN_device") |
+| `timestamp` | Yes | ISO8601 formatted timestamp |
+| `pointName` | Yes | Measurement point name (e.g., "kW", "Temperature") |
+| `value` | Yes | Numeric measurement value |
+| `externalID` | No | External device numeric ID (corresponds to device_num_id) |
 
-### Example Input:
+### Example Input (without externalID):
 ```csv
 building,device,timestamp,pointName,value
 US-MTV-1708,MAIN_device,2025-01-15T00:00:00,kW,125.5
 US-MTV-1708,MAIN_device,2025-01-15T00:00:00,Temperature,72.3
 US-MTV-1708,MAIN_device,2025-01-15T00:15:00,kW,130.2
 ```
+
+### Example Input (with externalID):
+```csv
+building,device,externalID,timestamp,pointName,value
+US-MTV-1708,MAIN_device,12345,2025-01-15T00:00:00,kW,125.5
+US-MTV-1708,MAIN_device,12345,2025-01-15T00:00:00,Temperature,72.3
+US-MTV-1708,MAIN_device,67890,2025-02-01T00:00:00,kW,130.2
+```
+
+**Note:** When the `externalID` column is present, data will be automatically split and grouped by unique combinations of (building, device, externalID). The externalID value will be used to populate the `device_num_id` parameter in the generated run_command.txt files.
 
 ## Usage
 
@@ -209,9 +220,15 @@ Output directory: C:\current\directory
 - Add custom unit mappings by editing the `unit_df` DataFrame in the script (line 15)
 
 ### Empty or incorrect output
-- Verify your input file has columns: `building`, `device`, `timestamp`, `pointName`, `value`
+- Verify your input file has required columns: `building`, `device`, `timestamp`, `pointName`, `value`
+- Optional column: `externalID` (if present, data will be grouped by it)
 - Check that timestamps are in ISO8601 format
 - Ensure numeric values don't have unexpected formatting
+
+### Multiple output folders for same building/device
+- This is expected if your data includes the `externalID` column with different values
+- Each unique combination of (building, device, externalID) will create a separate output folder
+- The `device_num_id` parameter in run_command.txt will be populated with the externalID value
 
 ## Contributing
 

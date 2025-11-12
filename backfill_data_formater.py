@@ -255,7 +255,22 @@ def pivot_flat_file(input_path):
         if df.empty:
             raise ValueError("Input file is empty or contains no valid data")
 
-        for (building, device), group in df.groupby(['building', 'device']):
+        # Check if externalID column exists (optional)
+        has_external_id = 'externalID' in df.columns
+
+        # Determine grouping columns based on whether externalID exists
+        if has_external_id:
+            groupby_cols = ['building', 'device', 'externalID']
+        else:
+            groupby_cols = ['building', 'device']
+
+        for group_keys, group in df.groupby(groupby_cols):
+            # Unpack group keys based on number of grouping columns
+            if has_external_id:
+                building, device, external_id = group_keys
+            else:
+                building, device = group_keys
+                external_id = None
             df_single = group
             table = pd.pivot_table(data=df_single, values='value', index=['timestamp'], columns='pointName')
             table = table.rename_axis(None, axis=1).reset_index()
@@ -272,8 +287,11 @@ def pivot_flat_file(input_path):
             if not os.path.exists(newpath):
                 os.makedirs(newpath)
 
-            # Create a unique logger for this building/device combination
-            logger_name = f'{building}_{device}_{start_date}_{end_date}'
+            # Create a unique logger for this building/device/externalID combination
+            if external_id is not None:
+                logger_name = f'{building}_{device}_{external_id}_{start_date}_{end_date}'
+            else:
+                logger_name = f'{building}_{device}_{start_date}_{end_date}'
             logger = logging.getLogger(logger_name)
             logger.setLevel(logging.DEBUG)
 
@@ -310,6 +328,10 @@ def pivot_flat_file(input_path):
 
             # Create run_command.txt file with the command template
             api_key = get_api_key()
+
+            # Set device_num_id based on whether externalID is available
+            device_num_id_value = str(external_id) if external_id is not None else ''
+
             command_template = (
                 f'-- PRE MANGO --\n\n'
                 f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
@@ -319,7 +341,7 @@ def pivot_flat_file(input_path):
                 f'--api_key="{api_key}" '
                 f'--topic=projects/google.com:datalake/topics/replay '
                 f'--gcp_project_id=google.com:datalake '
-                f'--device_num_id= '
+                f'--device_num_id={device_num_id_value} '
                 f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com\n\n'
 
                 f'-- POST MANGO --\n\n'
@@ -330,7 +352,7 @@ def pivot_flat_file(input_path):
                 f'--api_key="{api_key}" '
                 f'--topic=projects/google.com:datalake/topics/replay '
                 f'--gcp_project_id=google.com:datalake '
-                f'--device_num_id= '
+                f'--device_num_id={device_num_id_value} '
                 f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com '
                 f'--data_field_name="points" '
                 f'--present_value_field_name="present_value"'
