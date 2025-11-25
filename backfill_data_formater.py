@@ -230,9 +230,84 @@ def format_timestamps(normalized_file):
     df.timestamp = df.timestamp + pd.Timedelta(minutes=15)
     return df
 
+def detect_paired_format(df):
+    """
+    Detect if the DataFrame has paired pointName/value columns format.
+
+    Args:
+        df: DataFrame to check
+    Returns:
+        Boolean indicating if paired format is detected
+    """
+    # Check for pointName1, value1, pointName2, value2 pattern
+    has_pointName1 = 'pointName1' in df.columns
+    has_value1 = 'value1' in df.columns
+    return has_pointName1 and has_value1
+
+def convert_paired_to_flat(df):
+    """
+    Convert paired column format to flat format.
+    Input: timestamp, building, device, externalID, pointName1, value1, pointName2, value2, ...
+    Output: building, device, timestamp, pointName, value, externalID (if present)
+
+    Args:
+        df: DataFrame with paired column format
+    Returns:
+        DataFrame in flat format
+    """
+    print("Detected paired column format (pointName1, value1, ...). Converting to flat format...")
+
+    # Extract metadata columns
+    metadata_cols = ['timestamp', 'building', 'device']
+    has_external_id = 'externalID' in df.columns
+    if has_external_id:
+        metadata_cols.append('externalID')
+
+    # Find all pointName/value pairs
+    point_pairs = []
+    i = 1
+    while f'pointName{i}' in df.columns and f'value{i}' in df.columns:
+        point_pairs.append(i)
+        i += 1
+
+    if not point_pairs:
+        raise ValueError("No valid pointName/value pairs found")
+
+    print(f"Found {len(point_pairs)} pointName/value pair(s)")
+
+    # Convert to flat format
+    flat_rows = []
+    for _, row in df.iterrows():
+        for i in point_pairs:
+            pointname_col = f'pointName{i}'
+            value_col = f'value{i}'
+
+            # Skip if pointName or value is NaN/empty
+            if pd.isna(row[pointname_col]) or pd.isna(row[value_col]):
+                continue
+
+            flat_row = {
+                'building': row['building'],
+                'device': row['device'],
+                'timestamp': row['timestamp'],
+                'pointName': row[pointname_col],
+                'value': row[value_col]
+            }
+
+            if has_external_id:
+                flat_row['externalID'] = row['externalID']
+
+            flat_rows.append(flat_row)
+
+    flat_df = pd.DataFrame(flat_rows)
+    print(f"Converted to flat format: {len(flat_df)} rows")
+    return flat_df
+
 def pivot_flat_file(input_path):
     """
-    Pivot a single flat CSV or XLSX file and split into distinct files
+    Pivot a single flat CSV or XLSX file and split into distinct files.
+    Now supports both flat format and paired column format from mango_reformatter.py
+
     Args:
         input_path: Absolute path to a single file
     Returns:
@@ -244,6 +319,10 @@ def pivot_flat_file(input_path):
     try:
         # split the single CSV/XLSX into distinct files for each device
         df = read_data_file(input_path)
+
+        # Check if input is in paired format and convert if needed
+        if detect_paired_format(df):
+            df = convert_paired_to_flat(df)
 
         # Validate required columns
         required_columns = ['building', 'device', 'timestamp', 'pointName', 'value']
