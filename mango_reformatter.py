@@ -72,12 +72,42 @@ def rename_point_columns(df):
 
     return df
 
+def restructure_to_paired_columns(df):
+    """
+    Restructure measurement columns into paired pointName/value columns.
+    Input: timestamp, kW, kWh, Temperature
+    Output: timestamp, pointName1, value1, pointName2, value2, pointName3, value3
+
+    Args:
+        df: DataFrame with timestamp and measurement columns
+    Returns:
+        DataFrame with paired pointName/value columns
+    """
+    # Get measurement columns (everything except timestamp)
+    measurement_cols = [col for col in df.columns if col != 'timestamp']
+
+    if not measurement_cols:
+        print("No measurement columns to restructure")
+        return df
+
+    # Create new DataFrame starting with timestamp
+    new_df = pd.DataFrame()
+    new_df['timestamp'] = df['timestamp']
+
+    # Create paired columns for each measurement
+    for idx, col_name in enumerate(measurement_cols, 1):
+        new_df[f'pointName{idx}'] = col_name  # Point name (e.g., "kW")
+        new_df[f'value{idx}'] = df[col_name]  # Actual values
+
+    print(f"Restructured {len(measurement_cols)} measurement columns into {len(measurement_cols)} pointName/value pairs")
+    return new_df
+
 def add_metadata_columns(df, building, device, external_id):
     """
     Add metadata columns (building, device, externalID) after the timestamp column.
 
     Args:
-        df: DataFrame with timestamp and measurement columns
+        df: DataFrame with timestamp and paired pointName/value columns
         building: Building identifier
         device: Device identifier
         external_id: External device ID (can be empty string)
@@ -222,26 +252,26 @@ def process_mango_export(input_path, output_path, building, device, external_id)
         print("=" * 60)
 
         # Step 1: Read CSV
-        print("\n[1/6] Reading CSV file...")
+        print("\n[1/7] Reading CSV file...")
         df = pd.read_csv(input_path)
         print(f"  Loaded {len(df)} rows, {len(df.columns)} columns")
 
         # Step 2: Validate
-        print("\n[2/6] Validating data...")
+        print("\n[2/7] Validating data...")
         if 'timestamp' not in df.columns:
             raise ValueError("CSV must contain a 'timestamp' column")
         print("  Validation passed")
 
         # Step 3: Remove _rendered columns
-        print("\n[3/6] Removing _rendered columns...")
+        print("\n[3/7] Removing _rendered columns...")
         df = remove_rendered_columns(df)
 
         # Step 4: Rename measurement columns
-        print("\n[4/6] Renaming measurement columns...")
+        print("\n[4/7] Renaming measurement columns...")
         df = rename_point_columns(df)
 
         # Step 5: Format timestamps
-        print("\n[5/6] Formatting timestamps...")
+        print("\n[5/7] Formatting timestamps...")
         df = format_timestamps(df)
         print("  Timestamps converted to Pacific timezone with 15-minute offset")
 
@@ -249,8 +279,12 @@ def process_mango_export(input_path, output_path, building, device, external_id)
         start_date = df.timestamp.min().date().strftime('%Y-%m-%d')
         end_date = df.timestamp.max().date().strftime('%Y-%m-%d')
 
-        # Step 6: Add metadata columns
-        print("\n[6/6] Adding metadata columns...")
+        # Step 6: Restructure to paired columns
+        print("\n[6/7] Restructuring to pointName/value pairs...")
+        df = restructure_to_paired_columns(df)
+
+        # Step 7: Add metadata columns
+        print("\n[7/7] Adding metadata columns...")
         df = add_metadata_columns(df, building, device, external_id)
 
         # Save to output
