@@ -17,16 +17,24 @@ def format_timestamps(df):
     Returns:
         DataFrame with formatted timestamps
     """
-    df.timestamp = pd.to_datetime(df.timestamp, format='ISO8601')
+    # First, ensure timestamp is converted to datetime
+    # Use utc=True to handle timezone-aware strings, then convert
+    df.timestamp = pd.to_datetime(df.timestamp, utc=True, errors='coerce')
 
-    # Check if timestamps are already timezone-aware
+    # Check if conversion was successful
+    if df.timestamp.isna().any():
+        # If UTC parsing failed, try without UTC
+        df.timestamp = pd.to_datetime(df.timestamp, errors='coerce')
+
+    # Now check if timestamps are timezone-aware
     if df.timestamp.dt.tz is not None:
-        # Already tz-aware, use tz_convert
+        # Already tz-aware, convert to Pacific
         df.timestamp = df.timestamp.dt.tz_convert('America/Los_Angeles')
     else:
-        # Timezone-naive, use tz_localize
+        # Timezone-naive, localize to Pacific
         df.timestamp = df.timestamp.dt.tz_localize('America/Los_Angeles', ambiguous='NaT')
 
+    # Add 15-minute offset
     df.timestamp = df.timestamp + pd.Timedelta(minutes=15)
     return df
 
@@ -445,9 +453,6 @@ if __name__ == "__main__":
                 print("\nInvalid choice. Exiting.")
                 sys.exit(1)
 
-        # Get metadata (same for all files)
-        building, device, external_id = get_user_metadata(args)
-
         # Determine output directory
         if args and args.output:
             output_dir = args.output
@@ -473,6 +478,19 @@ if __name__ == "__main__":
             try:
                 if len(files_to_process) > 1:
                     print(f"\n[{idx}/{len(files_to_process)}] Processing: {os.path.basename(input_file)}")
+
+                    # In batch mode, prompt for metadata for EACH file
+                    # (Unless using CLI with -b and -d flags provided for all files)
+                    if args and args.building and args.device:
+                        # CLI mode with metadata provided - use same for all files
+                        building, device, external_id = get_user_metadata(args)
+                    else:
+                        # Interactive batch mode - prompt for each file
+                        print(f"\nEnter metadata for: {os.path.basename(input_file)}")
+                        building, device, external_id = get_user_metadata(None)
+                else:
+                    # Single file mode - get metadata once
+                    building, device, external_id = get_user_metadata(args)
 
                 # First, we need to process the file to get the date range
                 # Create a temporary output path, then rename after we get dates
