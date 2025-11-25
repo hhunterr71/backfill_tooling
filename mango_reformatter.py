@@ -7,35 +7,37 @@ import csv
 
 def format_timestamps(df):
     """
-    Format timestamps by:
-    - Converting to ISO8601 datetime format
-    - Converting/localizing to America/Los_Angeles timezone (accounts for daylight savings)
-    - Adding 15-minute offset (for BixBox aggregation compatibility)
+    Unified timestamp formatting - handles both formatted and unformatted timestamps.
+    - Converts to datetime with timezone awareness
+    - Localizes to America/Los_Angeles timezone (accounts for daylight savings)
+    - Adds 15-minute offset (for BixBox aggregation compatibility)
+    - Skips formatting if timestamps are already timezone-aware (prevents double-processing)
 
     Args:
         df: DataFrame with timestamp column
     Returns:
         DataFrame with formatted timestamps
     """
-    # First, ensure timestamp is converted to datetime
-    # Use utc=True to handle timezone-aware strings, then convert
+    # Step 1: Convert to datetime (handles both aware and naive)
     df.timestamp = pd.to_datetime(df.timestamp, utc=True, errors='coerce')
 
-    # Check if conversion was successful
-    if df.timestamp.isna().any():
-        # If UTC parsing failed, try without UTC
+    # If UTC conversion failed (all NaT), try naive parsing
+    if df.timestamp.isna().all():
         df.timestamp = pd.to_datetime(df.timestamp, errors='coerce')
 
-    # Now check if timestamps are timezone-aware
+    # Step 2: Check if already timezone-aware
     if df.timestamp.dt.tz is not None:
-        # Already tz-aware, convert to Pacific
-        df.timestamp = df.timestamp.dt.tz_convert('America/Los_Angeles')
+        # Already tz-aware - check if it's Pacific
+        if str(df.timestamp.dt.tz) != 'America/Los_Angeles':
+            # Convert to Pacific
+            df.timestamp = df.timestamp.dt.tz_convert('America/Los_Angeles')
+        # Skip adding offset - assume it's already applied
+        print("  Timestamps already formatted (timezone-aware). Skipping offset.")
     else:
-        # Timezone-naive, localize to Pacific
+        # Timezone-naive - apply full formatting
         df.timestamp = df.timestamp.dt.tz_localize('America/Los_Angeles', ambiguous='NaT')
+        df.timestamp = df.timestamp + pd.Timedelta(minutes=15)
 
-    # Add 15-minute offset
-    df.timestamp = df.timestamp + pd.Timedelta(minutes=15)
     return df
 
 def remove_rendered_columns(df):
