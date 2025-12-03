@@ -8,22 +8,25 @@ import csv
 def format_timestamps(df):
     """
     Unified timestamp formatting - handles both formatted and unformatted timestamps.
-    - Converts to datetime with timezone awareness
+    - Parses timestamps using ISO8601 format
     - Localizes to America/Los_Angeles timezone (accounts for daylight savings)
     - Adds 15-minute offset (for BixBox aggregation compatibility)
     - Skips formatting if timestamps are already timezone-aware (prevents double-processing)
+    - Raises error if timestamp parsing fails (no fallback to prevent bad data)
 
     Args:
         df: DataFrame with timestamp column
     Returns:
         DataFrame with formatted timestamps
+    Raises:
+        ValueError: If timestamps cannot be parsed in ISO8601 format
     """
-    # Step 1: Convert to datetime (handles both aware and naive)
-    df.timestamp = pd.to_datetime(df.timestamp, utc=True, errors='coerce')
+    # Step 1: Convert to datetime using ISO8601 format
+    df.timestamp = pd.to_datetime(df.timestamp, format='ISO8601')
 
-    # If UTC conversion failed (all NaT), try naive parsing
-    if df.timestamp.isna().all():
-        df.timestamp = pd.to_datetime(df.timestamp, errors='coerce')
+    # Check for any parsing failures (NaT values)
+    if df.timestamp.isna().any():
+        raise ValueError("Failed to parse timestamps in ISO8601 format. Found NaT values. Check input data format.")
 
     # Step 2: Check if already timezone-aware
     if df.timestamp.dt.tz is not None:
