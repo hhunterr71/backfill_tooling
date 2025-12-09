@@ -21,12 +21,20 @@ def format_timestamps(df):
     Raises:
         ValueError: If timestamps cannot be parsed in ISO8601 format
     """
-    # Step 1: Convert to datetime using ISO8601 format
-    df.timestamp = pd.to_datetime(df.timestamp, format='ISO8601')
+    # Step 1: Convert to datetime using mixed format to handle various timestamp formats
+    # This handles: ISO8601, common formats with/without zero-padding
+    # Store original count for validation
+    original_count = len(df)
+    original_timestamps = df.timestamp.copy()
+
+    df.timestamp = pd.to_datetime(df.timestamp, format='mixed')
 
     # Check for any parsing failures (NaT values)
-    if df.timestamp.isna().any():
-        raise ValueError("Failed to parse timestamps in ISO8601 format. Found NaT values. Check input data format.")
+    nat_count = df.timestamp.isna().sum()
+    if nat_count > 0:
+        # Show examples of failed timestamps for debugging
+        failed_examples = original_timestamps[df.timestamp.isna()].head(5).tolist()
+        raise ValueError(f"Failed to parse {nat_count} timestamp(s) out of {original_count}. Examples of failed timestamps: {failed_examples}")
 
     # Step 2: Check if already timezone-aware
     if df.timestamp.dt.tz is not None:
