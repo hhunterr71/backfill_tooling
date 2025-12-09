@@ -9,6 +9,7 @@ import datetime
 import csv
 import pytz
 import openpyxl
+import re
 
 dirname = os.path.dirname(os.path.abspath(__file__))
 
@@ -239,11 +240,16 @@ def format_timestamps(normalized_file):
     original_timestamps = df.timestamp.copy()
 
     # Try to detect if input timestamps already have timezone info
+    # This indicates they've been processed by mango_reformatter and already have the 15-min offset
     already_tz_aware = False
     if len(df) > 0:
         first_ts = str(df.timestamp.iloc[0])
-        # Check for timezone indicators in the string representation
-        already_tz_aware = ('T' in first_ts and ('-' in first_ts.split('T')[-1] or '+' in first_ts.split('T')[-1])) or \
+        # Check for timezone indicators in various formats:
+        # - ISO8601 with T: "2025-10-01T07:15:00-07:00"
+        # - Pandas format: "2025-10-01 07:15:00-07:00" (space instead of T)
+        # - Check last 6 characters for timezone pattern like "-07:00" or "+00:00"
+        tz_pattern = r'[+-]\d{2}:\d{2}$'  # Matches "-07:00" or "+05:30" at end of string
+        already_tz_aware = bool(re.search(tz_pattern, first_ts)) or \
                           (hasattr(df.timestamp.iloc[0], 'tz') and df.timestamp.iloc[0].tz is not None)
 
     # Step 2: Convert to datetime and normalize to UTC
