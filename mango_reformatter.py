@@ -21,17 +21,14 @@ def format_timestamps(df):
     Raises:
         ValueError: If timestamps cannot be parsed in ISO8601 format
     """
-    # Step 1: Convert to datetime using ISO8601 format to handle timezone-aware timestamps
+    # Step 1: Convert to datetime and normalize to UTC
     # This handles: ISO8601 timestamps with explicit timezone offsets (e.g., 2025-10-01T00:00:00-07:00)
+    # Using utc=True normalizes all timestamps to UTC first, avoiding "mixed timezone" issues
     # Store original count for validation
     original_count = len(df)
     original_timestamps = df.timestamp.copy()
 
-    df.timestamp = pd.to_datetime(df.timestamp, format='ISO8601')
-
-    # Verify the conversion succeeded - timestamp should now be datetime64 type
-    if not pd.api.types.is_datetime64_any_dtype(df.timestamp):
-        raise ValueError(f"Timestamp conversion failed. Column type is '{df.timestamp.dtype}' instead of datetime. First few values: {df.timestamp.head(3).tolist()}")
+    df.timestamp = pd.to_datetime(df.timestamp, utc=True)
 
     # Check for any parsing failures (NaT values)
     nat_count = df.timestamp.isna().sum()
@@ -40,18 +37,14 @@ def format_timestamps(df):
         failed_examples = original_timestamps[df.timestamp.isna()].head(5).tolist()
         raise ValueError(f"Failed to parse {nat_count} timestamp(s) out of {original_count}. Examples of failed timestamps: {failed_examples}")
 
-    # Step 2: Check if already timezone-aware
-    if df.timestamp.dt.tz is not None:
-        # Already tz-aware - check if it's Pacific
-        if str(df.timestamp.dt.tz) != 'America/Los_Angeles':
-            # Convert to Pacific
-            df.timestamp = df.timestamp.dt.tz_convert('America/Los_Angeles')
-        # Skip adding offset - assume it's already applied
-        print("  Timestamps already formatted (timezone-aware). Skipping offset.")
-    else:
-        # Timezone-naive - apply full formatting
-        df.timestamp = df.timestamp.dt.tz_localize('America/Los_Angeles', ambiguous='NaT')
-        df.timestamp = df.timestamp + pd.Timedelta(minutes=15)
+    # Step 2: Convert from UTC to America/Los_Angeles timezone
+    # This properly handles daylight saving time transitions
+    df.timestamp = df.timestamp.dt.tz_convert('America/Los_Angeles')
+
+    # Step 3: Add 15-minute offset for BixBox aggregation compatibility
+    df.timestamp = df.timestamp + pd.Timedelta(minutes=15)
+
+    print("  Timestamps converted to Pacific timezone with 15-minute offset")
 
     return df
 
@@ -298,7 +291,6 @@ def process_mango_export(input_path, output_path, building, device, external_id)
         # Step 5: Format timestamps
         print("\n[5/7] Formatting timestamps...")
         df = format_timestamps(df)
-        print("  Timestamps converted to Pacific timezone with 15-minute offset")
 
         # Extract date range for filename
         start_date = df.timestamp.min().date().strftime('%Y-%m-%d')

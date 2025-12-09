@@ -233,17 +233,22 @@ def format_timestamps(normalized_file):
     """
     df = normalized_file
 
-    # Step 1: Convert to datetime using ISO8601 format to handle timezone-aware timestamps
-    # This handles: ISO8601 timestamps with explicit timezone offsets (e.g., 2025-10-01T00:00:00-07:00)
-    # Store original count for validation
+    # Step 1: Check if timestamps are already timezone-aware (before parsing)
+    # This helps us determine if we should add the 15-minute offset later
     original_count = len(df)
     original_timestamps = df.timestamp.copy()
 
-    df.timestamp = pd.to_datetime(df.timestamp, format='ISO8601')
+    # Try to detect if input timestamps already have timezone info
+    already_tz_aware = False
+    if len(df) > 0:
+        first_ts = str(df.timestamp.iloc[0])
+        # Check for timezone indicators in the string representation
+        already_tz_aware = ('T' in first_ts and ('-' in first_ts.split('T')[-1] or '+' in first_ts.split('T')[-1])) or \
+                          (hasattr(df.timestamp.iloc[0], 'tz') and df.timestamp.iloc[0].tz is not None)
 
-    # Verify the conversion succeeded - timestamp should now be datetime64 type
-    if not pd.api.types.is_datetime64_any_dtype(df.timestamp):
-        raise ValueError(f"Timestamp conversion failed. Column type is '{df.timestamp.dtype}' instead of datetime. First few values: {df.timestamp.head(3).tolist()}")
+    # Step 2: Convert to datetime and normalize to UTC
+    # Using utc=True normalizes all timestamps to UTC first, avoiding "mixed timezone" issues
+    df.timestamp = pd.to_datetime(df.timestamp, utc=True)
 
     # Check for any parsing failures (NaT values)
     nat_count = df.timestamp.isna().sum()
@@ -252,18 +257,15 @@ def format_timestamps(normalized_file):
         failed_examples = original_timestamps[df.timestamp.isna()].head(5).tolist()
         raise ValueError(f"Failed to parse {nat_count} timestamp(s) out of {original_count}. Examples of failed timestamps: {failed_examples}")
 
-    # Step 2: Check if already timezone-aware
-    if df.timestamp.dt.tz is not None:
-        # Already tz-aware - check if it's Pacific
-        if str(df.timestamp.dt.tz) != 'America/Los_Angeles':
-            # Convert to Pacific
-            df.timestamp = df.timestamp.dt.tz_convert('America/Los_Angeles')
-        # Skip adding offset - assume it's already applied
+    # Step 3: Convert from UTC to America/Los_Angeles timezone
+    df.timestamp = df.timestamp.dt.tz_convert('America/Los_Angeles')
+
+    # Step 4: Add 15-minute offset only if timestamps weren't already timezone-aware
+    if already_tz_aware:
         print("  Timestamps already formatted (timezone-aware). Skipping offset.")
     else:
-        # Timezone-naive - apply full formatting
-        df.timestamp = df.timestamp.dt.tz_localize('America/Los_Angeles', ambiguous='NaT')
         df.timestamp = df.timestamp + pd.Timedelta(minutes=15)
+        print("  Timestamps converted to Pacific timezone with 15-minute offset")
 
     return df
 
