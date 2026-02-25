@@ -176,6 +176,33 @@ def write_run_file(building_id, meter_name, external_id,
     print(f"  Run file written: {filepath}")
 
 # ------------------------------------
+# Prerequisites
+# ------------------------------------
+def run_prerequisites():
+    """
+    Run required environment setup before any delete commands:
+      1. g4d -f backfill
+      2. g4 sync
+    Returns True on success, False if either command fails.
+    """
+    prereqs = [
+        ("g4d -f backfill", ["g4d", "-f", "backfill"]),
+        ("g4 sync",          ["g4", "sync"]),
+    ]
+    for label, cmd in prereqs:
+        print(f"  Running: {label}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        if result.stderr.strip():
+            print(result.stderr.strip())
+        if result.returncode != 0:
+            print(f"  ✗ '{label}' failed (exit code {result.returncode}). Aborting.")
+            return False
+        print(f"  ✓ {label} OK")
+    return True
+
+# ------------------------------------
 # Output parsing
 # ------------------------------------
 def extract_bt_delete_lines(stdout, stderr):
@@ -609,6 +636,15 @@ if __name__ == "__main__":
                 break
 
             # ---- Phase 3: Execute ----
+            print(f"\n{'=' * 60}")
+            print("Setting up environment...")
+            print(f"{'=' * 60}\n")
+
+            if not run_prerequisites():
+                print("\nEnvironment setup failed. No delete commands were run.")
+                print(f"Files are in: {output_dir}/")
+                break
+
             print(f"\n{'=' * 60}")
             print("Running commands...")
             print(f"{'=' * 60}\n")

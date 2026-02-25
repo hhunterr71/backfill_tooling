@@ -270,6 +270,15 @@ building_id,meter_name,external_id,start_date,end_date
 US-MFA-BV100,utility-WM_01_BLDGDCW,1743694964149,2025-06-30 00:00:00,2026-02-05 00:00:00
 ```
 
+## Prerequisites
+
+Before any delete commands run, the tool automatically executes the following environment setup in order:
+
+1. `g4d -f backfill` — switches into the backfill client
+2. `g4 sync` — syncs the client
+
+These run once after you confirm execution. If either command fails, the tool aborts and no blaze commands are run. The generated data files and run command files are preserved in the output directory.
+
 ## Usage
 
 ### Batch file mode
