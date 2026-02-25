@@ -230,6 +230,119 @@ Output directory: C:\current\directory
 - Each unique combination of (building, device, externalID) will create a separate output folder
 - The `device_num_id` parameter in run_command.txt will be populated with the externalID value
 
+---
+
+# Carson Delete Tool (`carson_delete.py`)
+
+A tool for running backfill **delete** operations on one or more meters. It generates the required timestamp data files, builds the blaze delete command, shows a review before execution, and writes per-entry summary files with the results.
+
+## Features
+
+- **Three input modes**: batch CSV/XLSX file, single one-off entry via CLI flags, or interactive prompts
+- **Template generation**: generates a blank batch CSV with an example row (interactive mode, option 0)
+- **Two-phase execution**: files are generated and reviewed before any commands are run
+- **Timezone-aware timestamps**: all dates are localized to America/Los_Angeles
+- **Per-entry output folders**: each entry gets its own subfolder with a data file, run command reference, and summary
+- **Reset / quit support**: type `reset` or `quit` at any interactive prompt
+
+## Requirements
+
+- Python 3.7+
+- pandas
+- openpyxl
+- pytz
+
+## Batch File Format
+
+The batch input file must be CSV or XLSX with the following columns:
+
+| Column | Description |
+|--------|-------------|
+| `building_id` | Building identifier (e.g. `US-MFA-BV100`) |
+| `meter_name` | Meter name (e.g. `utility-WM_01_BLDGDCW`) |
+| `external_id` | Device numeric ID |
+| `start_date` | Start date — `YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS` |
+| `end_date` | End date — `YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS` |
+
+### Example batch CSV:
+```csv
+building_id,meter_name,external_id,start_date,end_date
+US-MFA-BV100,utility-WM_01_BLDGDCW,1743694964149,2025-06-30 00:00:00,2026-02-05 00:00:00
+```
+
+## Usage
+
+### Batch file mode
+```bash
+python carson_delete.py -i path/to/batch.csv
+python carson_delete.py -i path/to/batch.xlsx -o path/to/output
+```
+
+### Single one-off entry
+```bash
+python carson_delete.py \
+  --building_id US-MFA-BV100 \
+  --meter_name utility-WM_01_BLDGDCW \
+  --external_id 1743694964149 \
+  --start_date "2025-06-30 00:00:00" \
+  --end_date "2026-02-05 00:00:00"
+```
+
+### Interactive mode
+```bash
+python carson_delete.py
+```
+
+Prompts you to choose:
+- **0** — Generate a blank template CSV
+- **1** — Load a batch CSV/XLSX file
+- **2** — Enter a single meter manually
+
+### View help
+```bash
+python carson_delete.py --help
+```
+
+## Output Structure
+
+Each entry gets its own subfolder inside the output directory:
+
+```
+{output_dir}/
+└── {building_id}_{meter_name}_{start_date}_{end_date}/
+    ├── {building_id}_{meter_name}.csv                   # 2-row timestamp data file
+    ├── {building_id}_{meter_name}_run_command.txt        # Pre-execution reference
+    └── {building_id}_{meter_name}_delete_summary.txt    # Post-execution result
+```
+
+### Output Files
+
+**Data CSV** (`{building_id}_{meter_name}.csv`)
+- Two-row file with `timestamp` header, start timestamp, and end timestamp
+- Timestamps formatted as `YYYY-MM-DD HH:MM:SS±HH:MM` (America/Los_Angeles)
+
+**Run Command file** (`_run_command.txt`)
+- Written before execution; contains all entry details and the full blaze command
+- Useful for manual review or re-running outside the tool
+
+**Summary file** (`_delete_summary.txt`)
+- Written after execution; contains status (SUCCESS / FAILED), the command, and output
+- On success: shows the extracted `bt delete` lines from blaze output
+- On failure: shows full stdout/stderr for debugging
+
+## Troubleshooting
+
+### Error: Missing required columns
+- Ensure the batch file has all five columns: `building_id`, `meter_name`, `external_id`, `start_date`, `end_date`
+
+### Error: Cannot parse date
+- Use `YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS` format for dates
+
+### Command exits non-zero
+- Check the `_delete_summary.txt` file in the entry's subfolder for full blaze output
+
+---
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
