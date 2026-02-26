@@ -180,27 +180,32 @@ def write_run_file(building_id, meter_name, external_id,
 # ------------------------------------
 def run_prerequisites():
     """
-    Run required environment setup before any delete commands:
-      1. g4d -f backfill
-      2. g4 sync
-    Returns True on success, False if either command fails.
+    Run environment setup in a single shell session:
+      g4d -f backfill && g4 sync && pwd
+    All three run in one bash call so the cwd change from g4d carries through.
+    Returns the resulting working directory string on success, or None on failure.
     """
-    prereqs = [
-        ("g4d -f backfill", ["g4d", "-f", "backfill"]),
-        ("g4 sync",          ["g4", "sync"]),
-    ]
-    for label, cmd in prereqs:
-        print(f"  Running: {label}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.stdout.strip():
-            print(result.stdout.strip())
-        if result.stderr.strip():
-            print(result.stderr.strip())
-        if result.returncode != 0:
-            print(f"  ✗ '{label}' failed (exit code {result.returncode}). Aborting.")
-            return False
-        print(f"  ✓ {label} OK")
-    return True
+    print("  Running: g4d -f backfill && g4 sync")
+    result = subprocess.run(
+        ["bash", "-c", "g4d -f backfill && g4 sync && pwd"],
+        capture_output=True, text=True
+    )
+
+    # stdout last line is the pwd output; print everything before it
+    lines = result.stdout.strip().splitlines() if result.stdout.strip() else []
+    for line in lines[:-1]:
+        print(line)
+    cwd = lines[-1].strip() if lines else None
+
+    if result.stderr.strip():
+        print(result.stderr.strip())
+
+    if result.returncode != 0:
+        print(f"  ✗ Environment setup failed (exit code {result.returncode}). Aborting.")
+        return None
+
+    print(f"  ✓ Environment ready (cwd: {cwd})")
+    return cwd
 
 # ------------------------------------
 # Output parsing
@@ -230,9 +235,10 @@ def build_delete_command(data_file_path, external_id):
         f"--mode=delete"
     )
 
-def run_delete_command(data_file_path, external_id):
+def run_delete_command(data_file_path, external_id, cwd=None):
     """
     Run the blaze delete command via subprocess.
+    cwd: working directory to run the command in (set by run_prerequisites).
     Returns:
         (returncode, stdout, stderr)
     """
@@ -246,7 +252,7 @@ def run_delete_command(data_file_path, external_id):
         "--mode=delete"
     ]
     print("  Running blaze delete command...")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     return result.returncode, result.stdout, result.stderr
 
 # ------------------------------------
@@ -404,15 +410,16 @@ def prepare_entry(building_id, meter_name, external_id, start_date, end_date, ou
         'output_dir': entry_dir,
     }
 
-def execute_entry(prepared):
+def execute_entry(prepared, cwd=None):
     """
     Phase 2: Run the blaze command and write the summary file.
+    cwd: working directory passed from run_prerequisites (g4d client root).
     On success: summary contains only the extracted 'bt delete' lines.
     On failure: summary contains full stdout/stderr for debugging.
     Raises RuntimeError if the command exits non-zero.
     """
     returncode, stdout, stderr = run_delete_command(
-        prepared['data_file'], prepared['external_id']
+        prepared['data_file'], prepared['external_id'], cwd=cwd
     )
 
     if returncode == 0:
@@ -640,7 +647,8 @@ if __name__ == "__main__":
             print("Setting up environment...")
             print(f"{'=' * 60}\n")
 
-            if not run_prerequisites():
+            blaze_cwd = run_prerequisites()
+            if blaze_cwd is None:
                 print("\nEnvironment setup failed. No delete commands were run.")
                 print(f"Files are in: {output_dir}/")
                 break
@@ -657,7 +665,7 @@ if __name__ == "__main__":
                 label = f"{prepared['building_id']} / {prepared['meter_name']}"
                 print(f"[{idx}/{len(prepared_entries)}] {label}")
                 try:
-                    execute_entry(prepared)
+                    execute_entry(prepared, cwd=blaze_cwd)
                     successful += 1
                     print(f"  ✓ Done\n")
                 except Exception as e:
