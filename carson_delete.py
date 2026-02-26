@@ -180,19 +180,18 @@ def write_run_file(building_id, meter_name, external_id,
 # ------------------------------------
 def run_prerequisites():
     """
-    Run environment setup for the backfill client using a login shell so that
-    the g4d shell function (defined in profile scripts) is available:
-      bash --login -c "g4d -f backfill && g4 sync && pwd"
+    Run environment setup for the backfill client using the script-safe form:
+      bash -c 'cd "$(p4 g4d backfill)" && g4 sync && pwd'
 
-    g4d (shell function) sets P4CLIENT and cds to the client root in one step.
-    g4 sync then runs in that same session with the correct client and directory.
-    pwd captures the client root so blaze can be invoked from the right place.
+    p4 g4d <client> outputs the client root path (script-safe alternative to the
+    g4d shell function). We cd into it so g4 sync finds the .g4config file for
+    the right client. pwd captures the root so blaze can be run from there.
 
     Returns the client root directory string on success, or None on failure.
     """
-    print("  Running: g4d -f backfill && g4 sync (login shell)")
+    print("  Running: cd $(p4 g4d backfill) && g4 sync")
     result = subprocess.run(
-        ["bash", "--login", "-c", "g4d -f backfill && g4 sync && pwd"],
+        ["bash", "-c", 'cd "$(p4 g4d backfill)" && g4 sync && pwd'],
         capture_output=True, text=True
     )
 

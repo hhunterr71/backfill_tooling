@@ -274,8 +274,8 @@ US-MFA-BV100,utility-WM_01_BLDGDCW,1743694964149,2025-06-30 00:00:00,2026-02-05 
 
 Before any delete commands run, the tool automatically executes the following environment setup in order:
 
-1. `p4 g4d -f backfill` — switches into the backfill client (`p4 g4d` is used instead of `g4d` because `g4d` is a shell function only available in interactive terminals)
-2. `g4 sync` — syncs the client
+1. `cd "$(p4 g4d backfill)"` — navigates into the backfill client root (`p4 g4d <client>` is the script-safe form of the `g4d` shell function; it outputs the client path)
+2. `g4 sync` — syncs the client from within that directory (picks up `.g4config` automatically)
 
 These run once after you confirm execution. If either command fails, the tool aborts and no blaze commands are run. The generated data files and run command files are preserved in the output directory.
 
