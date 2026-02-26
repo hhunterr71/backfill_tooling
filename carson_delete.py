@@ -538,6 +538,7 @@ if __name__ == "__main__":
     while True:
         try:
             entries = []
+            input_file_path = None
 
             # ---- Collect entries ----
             if args and args.input:
@@ -545,7 +546,8 @@ if __name__ == "__main__":
                 if not check_input(args.input):
                     print("\nExiting due to invalid input file.")
                     sys.exit(1)
-                entries = read_batch_file(os.path.abspath(args.input))
+                input_file_path = os.path.abspath(args.input)
+                entries = read_batch_file(input_file_path)
                 print(f"Loaded {len(entries)} entry/entries from file.\n")
 
             elif args and args.building_id:
@@ -597,7 +599,8 @@ if __name__ == "__main__":
                             if not valid_file:
                                 print("Please try again.\n")
                             else:
-                                entries = read_batch_file(os.path.abspath(path))
+                                input_file_path = os.path.abspath(path)
+                                entries = read_batch_file(input_file_path)
                                 print(f"Loaded {len(entries)} entry/entries from file.")
                         valid_choice = True
 
@@ -643,7 +646,7 @@ if __name__ == "__main__":
             if args and args.output:
                 output_dir = args.output
             else:
-                default_dir = os.getcwd()
+                default_dir = os.path.dirname(input_file_path) if input_file_path else os.getcwd()
                 print(f"\nDefault output directory: {default_dir}")
                 use_different = input("Use a different output directory? (y/N): ").strip().lower()
                 check_special_input(use_different)
