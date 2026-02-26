@@ -180,48 +180,33 @@ def write_run_file(building_id, meter_name, external_id,
 # ------------------------------------
 def run_prerequisites():
     """
-    Run environment setup for the backfill client:
-      1. p4 g4d -f backfill  — registers the backfill client
-      2. g4 sync              — syncs it (P4CLIENT=backfill passed explicitly since
-                                the p4 binary cannot set env vars for sibling processes)
-      3. p4 -c backfill info  — retrieves the client root so blaze can run from there
+    Run environment setup for the backfill client using a login shell so that
+    the g4d shell function (defined in profile scripts) is available:
+      bash --login -c "g4d -f backfill && g4 sync && pwd"
+
+    g4d (shell function) sets P4CLIENT and cds to the client root in one step.
+    g4 sync then runs in that same session with the correct client and directory.
+    pwd captures the client root so blaze can be invoked from the right place.
 
     Returns the client root directory string on success, or None on failure.
     """
-    # Step 1: switch to backfill client
-    print("  Running: p4 g4d -f backfill")
-    r1 = subprocess.run(["p4", "g4d", "-f", "backfill"], capture_output=True, text=True)
-    if r1.stdout.strip():
-        print(r1.stdout.strip())
-    if r1.stderr.strip():
-        print(r1.stderr.strip())
-    if r1.returncode != 0:
-        print(f"  ✗ p4 g4d -f backfill failed (exit code {r1.returncode}). Aborting.")
-        return None
-    print("  ✓ p4 g4d -f backfill OK")
+    print("  Running: g4d -f backfill && g4 sync (login shell)")
+    result = subprocess.run(
+        ["bash", "--login", "-c", "g4d -f backfill && g4 sync && pwd"],
+        capture_output=True, text=True
+    )
 
-    # Step 2: sync — pass P4CLIENT explicitly since p4 g4d can't set env vars
-    print("  Running: g4 sync")
-    env = {**os.environ, 'P4CLIENT': 'backfill'}
-    r2 = subprocess.run(["g4", "sync"], capture_output=True, text=True, env=env)
-    if r2.stdout.strip():
-        print(r2.stdout.strip())
-    if r2.stderr.strip():
-        print(r2.stderr.strip())
-    if r2.returncode != 0:
-        print(f"  ✗ g4 sync failed (exit code {r2.returncode}). Aborting.")
-        return None
-    print("  ✓ g4 sync OK")
+    # Last line of stdout is pwd (the client root); print everything before it
+    lines = result.stdout.strip().splitlines() if result.stdout.strip() else []
+    for line in lines[:-1]:
+        print(line)
+    client_root = lines[-1].strip() if lines else None
 
-    # Step 3: get the client root so blaze can be run from the right directory
-    r3 = subprocess.run(["p4", "-c", "backfill", "info"], capture_output=True, text=True)
-    client_root = None
-    for line in r3.stdout.splitlines():
-        if line.lower().startswith("client root:"):
-            client_root = line.split(":", 1)[1].strip()
-            break
-    if not client_root:
-        print("  ✗ Could not determine client root from 'p4 info'. Aborting.")
+    if result.stderr.strip():
+        print(result.stderr.strip())
+
+    if result.returncode != 0:
+        print(f"  ✗ Environment setup failed (exit code {result.returncode}). Aborting.")
         return None
 
     print(f"  ✓ Environment ready (client root: {client_root})")
