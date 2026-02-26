@@ -274,7 +274,7 @@ US-MFA-BV100,utility-WM_01_BLDGDCW,1743694964149,2025-06-30 00:00:00,2026-02-05 
 
 Before any delete commands run, the tool automatically executes the following environment setup in order:
 
-1. `g4d -f backfill` — switches into the backfill client
+1. `p4 g4d -f backfill` — switches into the backfill client (`p4 g4d` is used instead of `g4d` because `g4d` is a shell function only available in interactive terminals)
 2. `g4 sync` — syncs the client
 
 These run once after you confirm execution. If either command fails, the tool aborts and no blaze commands are run. The generated data files and run command files are preserved in the output directory.
@@ -306,6 +306,7 @@ Prompts you to choose:
 - **0** — Generate a blank template CSV
 - **1** — Load a batch CSV/XLSX file
 - **2** — Enter a single meter manually
+- **3** — Run environment setup only (`p4 g4d -f backfill && g4 sync`) — useful for testing prerequisites without running any deletes
 
 ### View help
 ```bash

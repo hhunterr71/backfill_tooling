@@ -185,9 +185,9 @@ def run_prerequisites():
     All three run in one bash call so the cwd change from g4d carries through.
     Returns the resulting working directory string on success, or None on failure.
     """
-    print("  Running: g4d -f backfill && g4 sync")
+    print("  Running: p4 g4d -f backfill && g4 sync")
     result = subprocess.run(
-        ["bash", "-c", "g4d -f backfill && g4 sync && pwd"],
+        ["bash", "-c", "p4 g4d -f backfill && g4 sync && pwd"],
         capture_output=True, text=True
     )
 
@@ -527,11 +527,12 @@ if __name__ == "__main__":
                 print("  0. Generate a blank template CSV (with example row)")
                 print("  1. Load a batch CSV/XLSX file")
                 print("  2. Enter a single meter manually")
+                print("  3. Run environment setup only (p4 g4d -f backfill && g4 sync)")
                 print()
 
                 valid_choice = False
                 while not valid_choice:
-                    choice = input("Enter choice (0-2): ").strip()
+                    choice = input("Enter choice (0-3): ").strip()
                     check_special_input(choice)
 
                     if choice == '0':
@@ -562,8 +563,17 @@ if __name__ == "__main__":
                         entries = [collect_one_off_entry()]
                         valid_choice = True
 
+                    elif choice == '3':
+                        print()
+                        cwd = run_prerequisites()
+                        if cwd is None:
+                            print("\nEnvironment setup failed.")
+                        else:
+                            print("\nEnvironment setup complete. You may now re-run with option 1 or 2.")
+                        sys.exit(0)
+
                     else:
-                        print("Invalid choice. Please enter 0, 1, or 2.\n")
+                        print("Invalid choice. Please enter 0, 1, 2, or 3.\n")
 
             # ---- Determine output directory ----
             if args and args.output:
