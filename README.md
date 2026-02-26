@@ -307,6 +307,7 @@ Prompts you to choose:
 - **1** — Load a batch CSV/XLSX file
 - **2** — Enter a single meter manually
 - **3** — Run environment setup only (`p4 g4d -f backfill && g4 sync`) — useful for testing prerequisites without running any deletes
+- **4** — Combine all `*_delete_summary.txt` files in a directory into one consolidated report
 
 ### View help
 ```bash
@@ -339,6 +340,10 @@ Each entry gets its own subfolder inside the output directory:
 - Written after execution; contains status (SUCCESS / FAILED), the command, and output
 - On success: shows the extracted `bt delete` lines from blaze output
 - On failure: shows full stdout/stderr for debugging
+
+**Combined summary** (generated via interactive option 4)
+- Recursively finds all `*_delete_summary.txt` files under a chosen directory
+- Writes a single `combined_delete_summary.txt` (or custom filename) with a header showing total entry count and generation timestamp, followed by each individual summary in alphabetical order
 
 ## Troubleshooting
 

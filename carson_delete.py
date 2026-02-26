@@ -216,13 +216,13 @@ def run_prerequisites():
 # ------------------------------------
 def extract_bt_delete_lines(stdout, stderr):
     """
-    Extract 'bt delete' lines from blaze output.
+    Extract 'INFO: bt delete' lines from blaze output.
     Returns a list of matching lines, or an empty list if none found.
     Searches both stdout and stderr since blaze may write to either.
     """
     combined = (stdout or "") + "\n" + (stderr or "")
     return [line.strip() for line in combined.splitlines()
-            if line.strip().startswith("bt delete")]
+            if line.strip().startswith("INFO: bt delete")]
 
 # ------------------------------------
 # Command building and execution
@@ -487,6 +487,43 @@ def collect_one_off_entry():
     return entry
 
 # ------------------------------------
+# Combined summary file generation
+# ------------------------------------
+def combine_summary_files(directory, output_path):
+    """
+    Recursively find all *_delete_summary.txt files under directory,
+    sort them alphabetically, and write a single consolidated report
+    to output_path.
+    Returns the number of files combined.
+    """
+    summary_files = sorted([
+        os.path.join(root, f)
+        for root, _, files in os.walk(directory)
+        for f in files
+        if f.endswith('_delete_summary.txt')
+    ])
+
+    if not summary_files:
+        return 0
+
+    with open(output_path, 'w', encoding='utf-8') as out:
+        out.write("=" * 60 + "\n")
+        out.write("COMBINED DELETE SUMMARY\n")
+        out.write(f"Generated : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        out.write(f"Entries   : {len(summary_files)}\n")
+        out.write(f"Source    : {directory}\n")
+        out.write("=" * 60 + "\n")
+
+        for idx, filepath in enumerate(summary_files, 1):
+            out.write(f"\n\n[{idx}/{len(summary_files)}] {os.path.relpath(filepath, directory)}\n")
+            out.write("-" * 60 + "\n")
+            with open(filepath, 'r', encoding='utf-8') as f:
+                out.write(f.read().strip())
+            out.write("\n")
+
+    return len(summary_files)
+
+# ------------------------------------
 # Main
 # ------------------------------------
 if __name__ == "__main__":
@@ -531,12 +568,13 @@ if __name__ == "__main__":
                 print("  0. Generate a blank template CSV (with example row)")
                 print("  1. Load a batch CSV/XLSX file")
                 print("  2. Enter a single meter manually")
-                print("  3. Run environment setup only (p4 g4d -f backfill && g4 sync)")
+                print("  3. Test Run environment setup only (p4 g4d -f backfill && g4 sync)")
+                print("  4. Combine all summary files in a directory into one report")
                 print()
 
                 valid_choice = False
                 while not valid_choice:
-                    choice = input("Enter choice (0-3): ").strip()
+                    choice = input("Enter choice (0-4): ").strip()
                     check_special_input(choice)
 
                     if choice == '0':
@@ -576,8 +614,30 @@ if __name__ == "__main__":
                             print("\nEnvironment setup complete. You may now re-run with option 1 or 2.")
                         sys.exit(0)
 
+                    elif choice == '4':
+                        print()
+                        folder = input("Enter directory containing summary files: ").strip().strip('"').strip("'")
+                        check_special_input(folder)
+                        if not folder:
+                            folder = os.getcwd()
+                        if not os.path.isdir(folder):
+                            print(f"ERROR: '{folder}' is not a valid directory.\n")
+                            continue
+                        default_name = "combined_delete_summary.txt"
+                        filename = input(f"Output filename (leave blank for '{default_name}'): ").strip().strip('"').strip("'")
+                        check_special_input(filename) if filename else None
+                        if not filename:
+                            filename = default_name
+                        output_path = os.path.join(folder, filename)
+                        count = combine_summary_files(folder, output_path)
+                        if count == 0:
+                            print("\nNo *_delete_summary.txt files found in that directory.")
+                        else:
+                            print(f"\nCombined {count} summary file(s) into: {output_path}")
+                        sys.exit(0)
+
                     else:
-                        print("Invalid choice. Please enter 0, 1, 2, or 3.\n")
+                        print("Invalid choice. Please enter 0, 1, 2, 3, or 4.\n")
 
             # ---- Determine output directory ----
             if args and args.output:
