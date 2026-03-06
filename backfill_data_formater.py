@@ -1,4 +1,5 @@
 from venv import create
+import subprocess
 import pandas as pd
 import os
 import argparse
@@ -44,8 +45,55 @@ def get_api_key():
 
     return api_key
  
-unit_df = pd.DataFrame({'pointName':['Current', 'Current_A', 'Current_B', 'Current_C', 'Frequency', 'PF', 'PF_A', 'PF_B', 'PF_C', 'Volts_AB', 'Volts_AN', 'Volts_BC', 'Volts_BN', 'Volts_CA', 'Volts_CN', 'Volts_LL', 'Volts_LN', 'kVAR_Demand', 'kVA_Demand', 'kVAR', 'kVA', 'kW', 'kW_A', 'kW_B', 'kW_C', 'kWh','Temperature','GasFlowRate_Unscaled','GasFlowTotal_Unscaled','WaterFlowTotal','WaterFlowRate','kWh_rec','water_volume_accumulator','energy_accumulator','gas_flowrate_sensor','gas_volume_accumulator','power_sensor'], 
-'Units':['amperes', 'amperes', 'amperes', 'amperes', 'hertz', 'no-units', 'no-units', 'no-units', 'no-units', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'volts', 'kilovolt-amperes-reactive', 'kilovolt-amperes', 'kilovolt-amperes-reactive', 'kilovolt-amperes', 'kilowatts', 'kilowatts', 'kilowatts', 'kilowatts', 'kilowatt-hours','degrees-fahrenheit','cubic-feet-per-hour','cubic-feet','us-gallons','us-gallons-per-minute','kilowatts','us-gallons','kilowatt-hours','cubic-feet-per-hour','cubic-feet','kilowatts']})
+# Standard point name → unit mappings
+_STANDARD_UNITS = {
+    'Current':               'amperes',
+    'Current_A':             'amperes',
+    'Current_B':             'amperes',
+    'Current_C':             'amperes',
+    'Frequency':             'hertz',
+    'PF':                    'no-units',
+    'PF_A':                  'no-units',
+    'PF_B':                  'no-units',
+    'PF_C':                  'no-units',
+    'Volts_AB':              'volts',
+    'Volts_AN':              'volts',
+    'Volts_BC':              'volts',
+    'Volts_BN':              'volts',
+    'Volts_CA':              'volts',
+    'Volts_CN':              'volts',
+    'Volts_LL':              'volts',
+    'Volts_LN':              'volts',
+    'kVAR_Demand':           'kilovolt-amperes-reactive',
+    'kVA_Demand':            'kilovolt-amperes',
+    'kVAR':                  'kilovolt-amperes-reactive',
+    'kVA':                   'kilovolt-amperes',
+    'kW':                    'kilowatts',
+    'kW_A':                  'kilowatts',
+    'kW_B':                  'kilowatts',
+    'kW_C':                  'kilowatts',
+    'kWh_rec':               'kilowatts',
+    'kWh':                   'kilowatt-hours',
+    'Temperature':           'degrees-fahrenheit',
+    'WaterFlowTotal':        'us-gallons',
+    'WaterFlowRate':         'us-gallons-per-minute',
+    'GasFlowRate_Unscaled':  'cubic-feet-per-hour',
+    'GasFlowTotal_Unscaled': 'cubic-feet'
+}
+
+# Mango-formatted point name → unit mappings
+_MANGO_UNITS = {
+    'water_volume_accumulator': 'us-gallons',
+    'flowrate_sensor': 'us-gallons-per-minute',
+    'gas_flowrate_sensor': 'cubic-feet-per-hour',
+    'gas_volume_accumulator': 'cubic-feet',
+    'energy_accumulator': 'kilowatt-hours',
+    'power_sensor': 'kilowatts'
+}
+
+unit_df = pd.DataFrame(
+    [{'pointName': k, 'Units': v} for k, v in {**_STANDARD_UNITS, **_MANGO_UNITS}.items()]
+)
 
 # Custom exception for reset functionality
 class ResetException(Exception):
@@ -456,31 +504,38 @@ def pivot_flat_file(input_path):
             # Set device_num_id based on whether externalID is available
             device_num_id_value = str(external_id) if external_id is not None else ''
 
-            command_template = (
-                f'-- PRE MANGO --\n\n'
-                f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
-                f'--data_file="{output_path}" '
-                f'--unit_file="{output_unit_path}" '
-                f'--mode="populate" '
-                f'--api_key="{api_key}" '
-                f'--topic=projects/google.com:datalake/topics/replay '
-                f'--gcp_project_id=google.com:datalake '
-                f'--device_num_id={device_num_id_value} '
-                f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com\n\n'
+            # Detect whether this device's data uses Mango-formatted point names
+            device_points = set(df_single['pointName'].unique())
+            is_mango = bool(device_points & set(_MANGO_UNITS.keys()))
 
-                f'-- POST MANGO --\n\n'
-                f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
-                f'--data_file="{output_path}" '
-                f'--unit_file="{output_unit_path}" '
-                f'--mode="populate" '
-                f'--api_key="{api_key}" '
-                f'--topic=projects/google.com:datalake/topics/replay '
-                f'--gcp_project_id=google.com:datalake '
-                f'--device_num_id={device_num_id_value} '
-                f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com '
-                f'--data_field_name="points" '
-                f'--present_value_field_name="present_value"'
-            )
+            if is_mango:
+                command_template = (
+                    f'-- MANGO --\n\n'
+                    f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
+                    f'--data_file="{output_path}" '
+                    f'--unit_file="{output_unit_path}" '
+                    f'--mode="populate" '
+                    f'--api_key="{api_key}" '
+                    f'--topic=projects/google.com:datalake/topics/replay '
+                    f'--gcp_project_id=google.com:datalake '
+                    f'--device_num_id={device_num_id_value} '
+                    f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com '
+                    f'--data_field_name="points" '
+                    f'--present_value_field_name="present_value"'
+                )
+            else:
+                command_template = (
+                    f'-- BITBOX --\n\n'
+                    f'blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- '
+                    f'--data_file="{output_path}" '
+                    f'--unit_file="{output_unit_path}" '
+                    f'--mode="populate" '
+                    f'--api_key="{api_key}" '
+                    f'--topic=projects/google.com:datalake/topics/replay '
+                    f'--gcp_project_id=google.com:datalake '
+                    f'--device_num_id={device_num_id_value} '
+                    f'--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com'
+                )
             run_command_path = os.path.join(newpath, 'run_command.txt')
             with open(run_command_path, 'w') as cmd_file:
                 cmd_file.write(command_template)
@@ -503,6 +558,186 @@ def pivot_flat_file(input_path):
     except Exception as e:
         raise Exception(f"Unexpected error processing file: {str(e)}")
  
+def run_prerequisites():
+    """
+    Run environment setup for the backfill client.
+    Returns the client root directory string on success, or None on failure.
+    """
+    print("  Running: cd $(p4 g4d backfill) && g4 sync")
+    result = subprocess.run(
+        ["bash", "-c", 'cd "$(p4 g4d backfill)" && g4 sync && pwd'],
+        capture_output=True, text=True
+    )
+
+    lines = result.stdout.strip().splitlines() if result.stdout.strip() else []
+    for line in lines[:-1]:
+        print(line)
+    client_root = lines[-1].strip() if lines else None
+
+    if result.stderr.strip():
+        print(result.stderr.strip())
+
+    if result.returncode != 0:
+        print(f"  ✗ Environment setup failed (exit code {result.returncode}). Aborting.")
+        return None
+
+    print(f"  ✓ Environment ready (client root: {client_root})")
+    return client_root
+
+
+def find_output_files(folder):
+    """
+    Locate the data CSV and unit CSV inside a formatter output folder.
+    Returns (data_file_path, unit_file_path).
+    Raises ValueError if either is missing or ambiguous.
+    """
+    all_csvs = [f for f in os.listdir(folder) if f.lower().endswith('.csv')]
+    unit_files = [f for f in all_csvs if f.endswith('_units.csv')]
+    data_files = [
+        f for f in all_csvs
+        if not f.endswith('_units.csv') and f != 'backfill_template.csv'
+    ]
+
+    if not data_files:
+        raise ValueError("No data CSV found in folder (expected a non-units CSV).")
+    if len(data_files) > 1:
+        raise ValueError(f"Multiple data CSVs found: {data_files}. Please ensure only one exists.")
+    if not unit_files:
+        raise ValueError("No unit CSV found in folder (expected a file ending in _units.csv).")
+    if len(unit_files) > 1:
+        raise ValueError(f"Multiple unit CSVs found: {unit_files}.")
+
+    return (
+        os.path.join(folder, data_files[0]),
+        os.path.join(folder, unit_files[0]),
+    )
+
+
+def detect_is_mango_from_folder(folder):
+    """
+    Read run_command.txt in the folder and check if it's a Mango command.
+    Returns True if mango, False if bitbox or file not found.
+    """
+    run_cmd_path = os.path.join(folder, 'run_command.txt')
+    if not os.path.exists(run_cmd_path):
+        return False
+    with open(run_cmd_path, 'r', encoding='utf-8') as f:
+        contents = f.read()
+    return '--data_field_name="points"' in contents
+
+
+def run_backfill_command(data_file, unit_file, device_num_id, is_mango, api_key, cwd=None):
+    """
+    Run the blaze backfill populate command via subprocess.
+    Returns (returncode, stdout, stderr).
+    """
+    cmd = [
+        "blaze", "run",
+        "java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool",
+        "--",
+        f"--data_file={data_file}",
+        f"--unit_file={unit_file}",
+        "--mode=populate",
+        f"--api_key={api_key}",
+        "--topic=projects/google.com:datalake/topics/replay",
+        "--gcp_project_id=google.com:datalake",
+        f"--device_num_id={device_num_id}",
+        "--robot_account=datalake-backfill@datalake.google.com.iam.gserviceaccount.com",
+    ]
+    if is_mango:
+        cmd += ["--data_field_name=points", "--present_value_field_name=present_value"]
+
+    print("  Running blaze backfill command...")
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    return result.returncode, result.stdout, result.stderr
+
+
+def extract_publish_lines(stdout, stderr):
+    """
+    Extract 'INFO: Finished publishing messages' lines from blaze output.
+    Searches both stdout and stderr.
+    Returns a list of matching lines, or empty list if none found.
+    """
+    combined = (stdout or "") + "\n" + (stderr or "")
+    return [line.strip() for line in combined.splitlines()
+            if "INFO: Finished publishing messages" in line]
+
+
+def write_backfill_run_summary(folder, command, returncode, stdout, stderr):
+    """
+    Write backfill_run_summary.txt to the given folder.
+    SUCCESS: exit 0 + publish lines found → writes publish lines.
+    UNCERTAIN: exit 0 but no publish lines → writes full output.
+    FAILED: non-zero exit → writes full output.
+    """
+    publish_lines = extract_publish_lines(stdout, stderr)
+
+    if returncode == 0 and publish_lines:
+        status = "SUCCESS"
+        body = "\n".join(publish_lines)
+    elif returncode == 0:
+        status = "UNCERTAIN (no 'Finished publishing' line found)"
+        combined = (stdout or "").strip()
+        if stderr and stderr.strip():
+            combined += ("\n\n--- stderr ---\n" + stderr.strip()) if combined else stderr.strip()
+        body = combined if combined else "(no output captured)"
+    else:
+        status = f"FAILED (exit code {returncode})"
+        combined = (stdout or "").strip()
+        if stderr and stderr.strip():
+            combined += ("\n\n--- stderr ---\n" + stderr.strip()) if combined else stderr.strip()
+        body = combined if combined else "(no output captured)"
+
+    filepath = os.path.join(folder, 'backfill_run_summary.txt')
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write(f"Status  : {status}\n")
+        f.write(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("-" * 60 + "\n")
+        f.write("Command:\n")
+        f.write(command + "\n")
+        f.write("-" * 60 + "\n")
+        f.write("Output:\n")
+        f.write(body + "\n")
+        f.write("=" * 60 + "\n")
+
+    print(f"  Summary written: {filepath}")
+    return filepath
+
+
+def generate_template_file(folder, filename=None):
+    """
+    Generate a blank input CSV template with the correct columns and one example row.
+    Auto-names the file 'backfill_template.csv' if no filename is given.
+    Returns the path to the written file.
+    """
+    if not filename:
+        filename = "backfill_template.csv"
+    elif not filename.lower().endswith('.csv'):
+        filename += '.csv'
+
+    if not os.path.exists(folder):
+        print(f"Creating directory: {folder}")
+        os.makedirs(folder)
+
+    filepath = os.path.join(folder, filename)
+
+    with open(filepath, 'w', newline='') as f:
+        writer = csv.writer(f, quoting=csv.QUOTE_ALL)
+        writer.writerow(['building', 'device', 'externalID', 'timestamp', 'pointName', 'value'])
+        writer.writerow([
+            'US-MFA-BV100',
+            'utility-WM_01_BLDGDCW',
+            '1743694964149'
+            '2025-06-30 00:00:00',
+            'kWh',
+            '123.45',
+        ])
+
+    print(f"  Template written: {filepath}")
+    return filepath
+
+
 def parse_arguments():
     """
     Parse command-line arguments for the backfill data formatter.
@@ -580,17 +815,30 @@ if __name__ == "__main__":
                 print("(Type 'quit' at any prompt to exit, 'reset' to start over)")
                 print()
                 print("Choose input mode:")
+                print("  0. Generate a blank template CSV (with example row)")
                 print("  1. Process a single file")
                 print("  2. Process all files in a directory")
                 print("  3. Process multiple individual files")
+                print("  4. Run a backfill command for a processed folder")
                 print()
 
                 valid_choice = False
                 while not valid_choice:
-                    choice = input("Enter choice (1-3): ").strip()
+                    choice = input("Enter choice (0-4): ").strip()
                     check_special_input(choice)
 
-                    if choice == '1':
+                    if choice == '0':
+                        folder = input("\nEnter folder to save template (leave blank for current directory): ").strip().strip('"').strip("'")
+                        check_special_input(folder) if folder else None
+                        if not folder:
+                            folder = os.getcwd()
+                        filename = input("Template filename (leave blank for 'backfill_template.csv'): ").strip().strip('"').strip("'")
+                        check_special_input(filename) if filename else None
+                        generate_template_file(folder, filename or None)
+                        print("\nTemplate created. Fill it in and re-run with option 1.")
+                        sys.exit(0)
+
+                    elif choice == '1':
                         # Single file mode
                         valid_input_file = False
                         while not valid_input_file:
@@ -624,8 +872,71 @@ if __name__ == "__main__":
                         else:
                             print("No files collected. Please try again.\n")
 
+                    elif choice == '4':
+                        # Run backfill command for a processed folder
+                        print()
+                        folder = input("Enter path to processed output folder: ").strip().strip('"').strip("'")
+                        check_special_input(folder)
+                        if not os.path.isdir(folder):
+                            print(f"ERROR: '{folder}' is not a valid directory.\n")
+                            continue
+                        folder = os.path.abspath(folder)
+
+                        try:
+                            data_file, unit_file = find_output_files(folder)
+                        except ValueError as e:
+                            print(f"ERROR: {e}\n")
+                            continue
+
+                        print(f"  Data file : {data_file}")
+                        print(f"  Unit file : {unit_file}")
+
+                        device_num_id = input("Device numeric ID (externalID, or leave blank): ").strip().strip('"').strip("'")
+                        check_special_input(device_num_id) if device_num_id else None
+
+                        api_key = get_api_key()
+
+                        is_mango = detect_is_mango_from_folder(folder)
+                        mode_label = "MANGO" if is_mango else "BITBOX"
+                        print(f"  Detected mode: {mode_label}")
+
+                        print(f"\n{'=' * 60}")
+                        print("Setting up environment...")
+                        print(f"{'=' * 60}\n")
+                        blaze_cwd = run_prerequisites()
+                        if blaze_cwd is None:
+                            print("\nEnvironment setup failed. No command was run.")
+                            sys.exit(1)
+
+                        print(f"\n{'=' * 60}")
+                        print(f"Running {mode_label} backfill command...")
+                        print(f"{'=' * 60}\n")
+                        returncode, stdout, stderr = run_backfill_command(
+                            data_file, unit_file, device_num_id, is_mango, api_key, cwd=blaze_cwd
+                        )
+
+                        publish_lines = extract_publish_lines(stdout, stderr)
+                        if returncode == 0 and publish_lines:
+                            print(f"  ✓ Success: {publish_lines[0]}")
+                        elif returncode == 0:
+                            print("  ! Command exited 0 but no 'Finished publishing' line found. Check summary.")
+                        else:
+                            print(f"  ✗ Command failed (exit code {returncode}). Check summary.")
+
+                        # Build the command string for the summary
+                        cmd_str = (
+                            f"blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- "
+                            f"--data_file={data_file} --unit_file={unit_file} --mode=populate "
+                            f"--device_num_id={device_num_id}"
+                        )
+                        if is_mango:
+                            cmd_str += ' --data_field_name=points --present_value_field_name=present_value'
+
+                        write_backfill_run_summary(folder, cmd_str, returncode, stdout, stderr)
+                        sys.exit(0)
+
                     else:
-                        print("Invalid choice. Please enter 1, 2, or 3.\n")
+                        print("Invalid choice. Please enter 0, 1, 2, 3, or 4.\n")
 
             # Determine default output directory
             if args and args.output:
