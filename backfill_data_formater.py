@@ -724,14 +724,14 @@ def generate_template_file(folder, filename=None):
 
     with open(filepath, 'w', newline='') as f:
         writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-        writer.writerow(['building', 'device', 'externalID', 'timestamp', 'pointName', 'value'])
+        writer.writerow(['building', 'device', 'externalID', 'pointName', 'timestamp', 'value'])
         writer.writerow([
-            'US-MFA-BV100',
-            'utility-WM_01_BLDGDCW',
-            '1743694964149'
+            'US-MFA-BUILDING',
+            'utility-METER',
+            '1743694964149',
+            'water_volume_accumulator',
             '2025-06-30 00:00:00',
-            'kWh',
-            '123.45',
+            '123.45'
         ])
 
     print(f"  Template written: {filepath}")
@@ -820,11 +820,12 @@ if __name__ == "__main__":
                 print("  2. Process all files in a directory")
                 print("  3. Process multiple individual files")
                 print("  4. Run a backfill command for a processed folder")
+                print("  5. Run backfill commands for all folders in a directory")
                 print()
 
                 valid_choice = False
                 while not valid_choice:
-                    choice = input("Enter choice (0-4): ").strip()
+                    choice = input("Enter choice (0-5): ").strip()
                     check_special_input(choice)
 
                     if choice == '0':
@@ -938,8 +939,99 @@ if __name__ == "__main__":
                         write_backfill_run_summary(folder, cmd_str, returncode, stdout, stderr)
                         sys.exit(0)
 
+                    elif choice == '5':
+                        # Run backfill commands for all folders in a directory
+                        print()
+                        parent_dir = input("Enter path to directory containing processed output folders: ").strip().strip('"').strip("'")
+                        check_special_input(parent_dir)
+                        if not os.path.isdir(parent_dir):
+                            print(f"ERROR: '{parent_dir}' is not a valid directory.\n")
+                            continue
+                        parent_dir = os.path.abspath(parent_dir)
+
+                        # Find all subfolders with run_command.txt
+                        folders_to_run = []
+                        for entry in sorted(os.listdir(parent_dir)):
+                            entry_path = os.path.join(parent_dir, entry)
+                            if os.path.isdir(entry_path) and os.path.exists(os.path.join(entry_path, 'run_command.txt')):
+                                folders_to_run.append(entry_path)
+
+                        if not folders_to_run:
+                            print(f"ERROR: No subfolders with run_command.txt found in '{parent_dir}'.\n")
+                            continue
+
+                        print(f"\nFound {len(folders_to_run)} folder(s) to process:")
+                        for f in folders_to_run:
+                            print(f"  - {os.path.basename(f)}")
+
+                        print(f"\n{'=' * 60}")
+                        print("Setting up environment...")
+                        print(f"{'=' * 60}\n")
+                        blaze_cwd = run_prerequisites()
+                        if blaze_cwd is None:
+                            print("\nEnvironment setup failed. No commands were run.")
+                            sys.exit(1)
+
+                        run_results = []
+                        for idx, folder in enumerate(folders_to_run, 1):
+                            folder_name = os.path.basename(folder)
+                            run_cmd_path = os.path.join(folder, 'run_command.txt')
+                            with open(run_cmd_path, 'r', encoding='utf-8') as f:
+                                contents = f.read()
+
+                            cmd_lines = [l.strip() for l in contents.splitlines() if l.strip().startswith('blaze')]
+                            if not cmd_lines:
+                                print(f"\n[{idx}/{len(folders_to_run)}] SKIPPED '{folder_name}': no blaze command in run_command.txt")
+                                run_results.append((folder_name, 'skipped', None))
+                                continue
+
+                            cmd_str = cmd_lines[0]
+                            is_mango = '--data_field_name="points"' in contents
+                            mode_label = "MANGO" if is_mango else "BITBOX"
+
+                            print(f"\n{'=' * 60}")
+                            print(f"[{idx}/{len(folders_to_run)}] Running {mode_label} backfill: {folder_name}")
+                            print(f"{'=' * 60}\n")
+
+                            process = subprocess.Popen(
+                                cmd_str, shell=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, cwd=blaze_cwd, bufsize=1
+                            )
+                            output_lines = []
+                            if process.stdout:
+                                for line in process.stdout:
+                                    print(line, end='', flush=True)
+                                    output_lines.append(line)
+                            process.wait()
+                            returncode = process.returncode
+                            stdout = ''.join(output_lines)
+                            stderr = ''
+
+                            publish_lines = extract_publish_lines(stdout, stderr)
+                            if returncode == 0 and publish_lines:
+                                print(f"  ✓ Success: {publish_lines[0]}")
+                                run_results.append((folder_name, 'success', returncode))
+                            elif returncode == 0:
+                                print("  ! Command exited 0 but no 'Finished publishing' line found. Check summary.")
+                                run_results.append((folder_name, 'uncertain', returncode))
+                            else:
+                                print(f"  ✗ Failed (exit code {returncode}). Check summary.")
+                                run_results.append((folder_name, 'failed', returncode))
+
+                            write_backfill_run_summary(folder, cmd_str, returncode, stdout, stderr)
+
+                        print(f"\n{'=' * 60}")
+                        print("Batch Backfill Summary")
+                        print(f"{'=' * 60}")
+                        for folder_name, status, rc in run_results:
+                            icon = '✓' if status == 'success' else ('!' if status == 'uncertain' else ('~' if status == 'skipped' else '✗'))
+                            print(f"  {icon} {folder_name}: {status.upper()}")
+                        print('=' * 60)
+                        sys.exit(0)
+
                     else:
-                        print("Invalid choice. Please enter 0, 1, 2, 3, or 4.\n")
+                        print("Invalid choice. Please enter 0, 1, 2, 3, 4, or 5.\n")
 
             # Determine default output directory
             if args and args.output:
