@@ -882,21 +882,22 @@ if __name__ == "__main__":
                             continue
                         folder = os.path.abspath(folder)
 
-                        try:
-                            data_file, unit_file = find_output_files(folder)
-                        except ValueError as e:
-                            print(f"ERROR: {e}\n")
+                        run_cmd_path = os.path.join(folder, 'run_command.txt')
+                        if not os.path.exists(run_cmd_path):
+                            print(f"ERROR: No run_command.txt found in '{folder}'.\n")
                             continue
 
-                        print(f"  Data file : {data_file}")
-                        print(f"  Unit file : {unit_file}")
+                        with open(run_cmd_path, 'r', encoding='utf-8') as f:
+                            contents = f.read()
 
-                        device_num_id = input("Device numeric ID (externalID, or leave blank): ").strip().strip('"').strip("'")
-                        check_special_input(device_num_id) if device_num_id else None
+                        # Extract the blaze command line (line starting with 'blaze')
+                        cmd_lines = [l.strip() for l in contents.splitlines() if l.strip().startswith('blaze')]
+                        if not cmd_lines:
+                            print(f"ERROR: No blaze command found in run_command.txt.\n")
+                            continue
+                        cmd_str = cmd_lines[0]
 
-                        api_key = get_api_key()
-
-                        is_mango = detect_is_mango_from_folder(folder)
+                        is_mango = '--data_field_name="points"' in contents
                         mode_label = "MANGO" if is_mango else "BITBOX"
                         print(f"  Detected mode: {mode_label}")
 
@@ -911,9 +912,20 @@ if __name__ == "__main__":
                         print(f"\n{'=' * 60}")
                         print(f"Running {mode_label} backfill command...")
                         print(f"{'=' * 60}\n")
-                        returncode, stdout, stderr = run_backfill_command(
-                            data_file, unit_file, device_num_id, is_mango, api_key, cwd=blaze_cwd
+                        print("  Running blaze backfill command...\n")
+                        process = subprocess.Popen(
+                            cmd_str, shell=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, cwd=blaze_cwd, bufsize=1
                         )
+                        output_lines = []
+                        for line in process.stdout:
+                            print(line, end='', flush=True)
+                            output_lines.append(line)
+                        process.wait()
+                        returncode = process.returncode
+                        stdout = ''.join(output_lines)
+                        stderr = ''
 
                         publish_lines = extract_publish_lines(stdout, stderr)
                         if returncode == 0 and publish_lines:
@@ -922,15 +934,6 @@ if __name__ == "__main__":
                             print("  ! Command exited 0 but no 'Finished publishing' line found. Check summary.")
                         else:
                             print(f"  ✗ Command failed (exit code {returncode}). Check summary.")
-
-                        # Build the command string for the summary
-                        cmd_str = (
-                            f"blaze run java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- "
-                            f"--data_file={data_file} --unit_file={unit_file} --mode=populate "
-                            f"--device_num_id={device_num_id}"
-                        )
-                        if is_mango:
-                            cmd_str += ' --data_field_name=points --present_value_field_name=present_value'
 
                         write_backfill_run_summary(folder, cmd_str, returncode, stdout, stderr)
                         sys.exit(0)
