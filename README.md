@@ -1,25 +1,65 @@
-# Backfill Data Formatter
+# Backfill Tooling
 
-A Python tool for processing and formatting building telemetry data from CSV and Excel files. This tool pivots flat telemetry data, formats timestamps, and generates unit mapping files for backfill operations.
+A suite of Python tools for processing building telemetry data and running backfill operations.
 
-## Features
+## Tools
+
+| Script | Purpose |
+|--------|---------|
+| `mango_reformatter.py` | Pre-processes raw Mango CSV exports into the flat format required by `backfill_data_formater.py` |
+| `multi_sheet_splitter.py` | Splits multi-sheet Excel files (already in flat format) into individual CSVs. If you were to put 5 or 6 different meters in one sheet all in different tabs. |
+| `backfill_data_formater.py` | Pivots flat telemetry data, formats timestamps, generates unit files, and produces backfill run commands. Bread and butter of the tool. |
+| `carson_delete.py` | Runs backfill **delete** operations for one or more meters |
+
+---
+## Typical Workflow
+
+### 1. backfill_data_formater.py  (direct)
+
+```
+backfill_data_formater.py
+```
+
+This tool has the ability to generate a template with each column that should be fill in. 
+
+
+### 2. Mango data pathway (common)
+
+```
+mango_reformatter.py  →  backfill_data_formater.py
+```
+
+If your source data is a raw Mango CSV export, run `mango_reformatter.py` first. It:
+1. Strips `_rendered` columns
+2. Renames measurement columns (removes meter-name prefix, e.g. `meter - kW` → `kW`) You may need to adjust the pointNames to Mango format `power_sensor` for `kW`.
+3. Converts timestamps to Pacific timezone and applies the 15-minute BixBox offset
+4. Restructures into the flat `building / device / timestamp / pointName / value` format
+
+The output CSV is then ready to pass directly into `backfill_data_formater.py`.
+
+## backfill_data_formater.py
+
+### Features
 
 - **Multi-format Support**: Reads both CSV and XLSX/XLS files
+- **Paired-column Detection**: Automatically converts `mango_reformatter.py` wide output (pointName1/value1...) to flat format
 - **Data Pivoting**: Converts flat telemetry data into wide format by building and device
 - **Timestamp Formatting**:
   - Localizes timestamps to America/Los_Angeles timezone
   - Handles daylight saving time
-  - Applies 15-minute offset for BixBox aggregation compatibility
+  - Applies 15-minute offset for BixBox aggregation compatibility (skipped if timestamps are already timezone-aware)
 - **Unit Mapping**: Automatically generates unit files mapping field names to engineering units
+- **Run Command Generation**: Writes a ready-to-use blaze backfill command for each output folder
 - **Validation**: Warns about unrecognized field names
 - **Comma-Free Output**: Ensures numeric values are formatted without thousands separators
 - **Flexible Usage**: Command-line or interactive mode
 
-## Requirements
+### Requirements
 
 - Python 3.7+
 - pandas
 - openpyxl
+- pytz
 
 ## Installation
 
@@ -51,7 +91,7 @@ The input file must be a flat CSV or XLSX file with the following columns:
 ```csv
 building,device,timestamp,pointName,value
 US-MTV-1708,MAIN_device,2025-01-15T00:00:00,kW,125.5
-US-MTV-1708,MAIN_device,2025-01-15T00:00:00,Temperature,72.3
+US-MTV-1708,MAIN_device,2025-01-15T00:00:00,kW,72.3
 US-MTV-1708,MAIN_device,2025-01-15T00:15:00,kW,130.2
 ```
 
@@ -59,7 +99,7 @@ US-MTV-1708,MAIN_device,2025-01-15T00:15:00,kW,130.2
 ```csv
 building,device,externalID,timestamp,pointName,value
 US-MTV-1708,MAIN_device,12345,2025-01-15T00:00:00,kW,125.5
-US-MTV-1708,MAIN_device,12345,2025-01-15T00:00:00,Temperature,72.3
+US-MTV-1708,MAIN_device,12345,2025-01-15T00:00:00,kW,72.3
 US-MTV-1708,MAIN_device,67890,2025-02-01T00:00:00,kW,130.2
 ```
 
@@ -91,10 +131,15 @@ Run without arguments to enter interactive mode:
 python backfill_data_formater.py
 ```
 
-The script will prompt you for:
-1. Input file path (CSV or XLSX)
+You will be prompted to choose from:
+- **0** — Generate a blank template CSV with an example row
+- **1** — Process a single file
+- **2** — Process all files in a directory
+- **3** — Process multiple individual files
+- **4** — Run a backfill command for an already-processed output folder
+- **5** — Run backfill commands for all folders in a directory
 
-Output will be saved to the current working directory.
+Type `quit` at any prompt to exit, or `reset` to start over.
 
 ## Output Structure
 
@@ -105,7 +150,8 @@ The tool creates a folder for each building/device combination with the date ran
 └── {building}_{device}_{start_date}_{end_date}/
     ├── backfill_log.log
     ├── {building}_{device}.csv
-    └── {building}_{device}_units.csv
+    ├── {building}_{device}_units.csv
+    └── run_command.txt
 ```
 
 ### Output Files
@@ -120,7 +166,12 @@ The tool creates a folder for each building/device combination with the date ran
 - Maps field names to engineering units
 - Columns: `Device Id`, `Field Name`, `Units`
 
-**3. Log File** (`backfill_log.log`)
+**3. Run Command** (`run_command.txt`)
+- Ready-to-use blaze backfill populate command with all required flags pre-filled
+- Labeled `-- MANGO --` or `-- BITBOX --` based on detected point names
+- Can be run directly or via interactive option 4/5
+
+**4. Log File** (`backfill_log.log`)
 - Processing details
 - Date ranges
 - Warnings about unrecognized fields
@@ -154,83 +205,6 @@ The tool recognizes and maps units for the following measurement types:
 
 **Note**: Unrecognized field names will trigger a warning but will still be processed.
 
-## Examples
-
-### Example 1: Process a single CSV file
-```bash
-python backfill_data_formater.py -i building_data.csv
-```
-
-**Output:**
-```
-============================================================
-Backfill Data Formatter - Single File Processor
-Supports: CSV and XLSX files
-============================================================
-
-Valid CSV file detected: building_data.csv
-Output directory: C:\Users\YourName\Documents
-
-Processing file: building_data.csv
-This may take a moment...
-
-============================================================
-Processing complete!
-Output saved to: C:\Users\YourName\Documents/
-Folder structure: {building}_{device}_{start-date}_{end-date}/
-============================================================
-```
-
-### Example 2: Process Excel file with custom output
-```bash
-python backfill_data_formater.py -i telemetry.xlsx -o C:/backfill_outputs
-```
-
-### Example 3: Interactive mode
-```bash
-python backfill_data_formater.py
-
-============================================================
-Backfill Data Formatter - Single File Processor
-Supports: CSV and XLSX files
-============================================================
-
-Interactive Mode
-(Use --help to see command-line options)
-
-Enter path to CSV or XLSX file: data.xlsx
-Valid XLSX file detected: data.xlsx
-Output directory: C:\current\directory
-...
-```
-
-## Troubleshooting
-
-### Error: File must be .csv or .xlsx format
-- Ensure your file has the correct extension (.csv, .xlsx, or .xls)
-- The file must exist at the specified path
-
-### Error: Path is a directory
-- This tool processes single files only
-- Provide a path to a specific file, not a folder
-
-### Warning: Unrecognized field names
-- The tool will still process the data
-- Review the warning to ensure field names are spelled correctly
-- Add custom unit mappings by editing the `unit_df` DataFrame in the script (line 15)
-
-### Empty or incorrect output
-- Verify your input file has required columns: `building`, `device`, `timestamp`, `pointName`, `value`
-- Optional column: `externalID` (if present, data will be grouped by it)
-- Check that timestamps are in ISO8601 format
-- Ensure numeric values don't have unexpected formatting
-
-### Multiple output folders for same building/device
-- This is expected if your data includes the `externalID` column with different values
-- Each unique combination of (building, device, externalID) will create a separate output folder
-- The `device_num_id` parameter in run_command.txt will be populated with the externalID value
-
----
 
 # Carson Delete Tool (`carson_delete.py`)
 
@@ -356,16 +330,4 @@ Each entry gets its own subfolder inside the output directory:
 ### Command exits non-zero
 - Check the `_delete_summary.txt` file in the entry's subfolder for full blaze output
 
----
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-[Add your license here]
-
-## Contact
-
-[Add contact information here]
