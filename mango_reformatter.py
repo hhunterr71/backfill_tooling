@@ -218,6 +218,132 @@ def validate_mango_csv(filepath):
         print(f"ERROR: Failed to read CSV: {str(e)}")
         return False
 
+def get_combine_metadata(args):
+    """
+    Get building and meter_name for combine operation from CLI args or interactively.
+
+    Args:
+        args: Parsed command-line arguments (or None for interactive mode)
+    Returns:
+        Tuple of (building, meter_name)
+    """
+    if args and args.building and hasattr(args, 'meter') and args.meter:
+        return args.building, args.meter
+
+    print("\n" + "=" * 60)
+    print("COMBINE METADATA INPUT")
+    print("=" * 60)
+
+    if not (args and args.building):
+        building = input("Enter building identifier (required): ").strip()
+        while not building:
+            print("Building is required.")
+            building = input("Enter building identifier (required): ").strip()
+    else:
+        building = args.building
+
+    meter_name = input("Enter meter name (required): ").strip()
+    while not meter_name:
+        print("Meter name is required.")
+        meter_name = input("Enter meter name (required): ").strip()
+
+    return building, meter_name
+
+
+def combine_mango_csv_files(directory, building, meter_name, output_dir=None):
+    """
+    Combine all mango CSV files in a directory into a single deduped, sorted CSV.
+
+    - Validates all files share identical columns before combining
+    - Removes duplicate rows identified by the same timestamp
+    - Sorts output by ascending timestamp
+    - Saves as: {building}_{meter_name}_{min_date}_to_{max_date}.csv
+
+    Args:
+        directory: Path to directory containing mango CSV files
+        building: Building identifier for the output filename
+        meter_name: Meter name for the output filename
+        output_dir: Directory to write output (defaults to input directory)
+    """
+    print("\n" + "=" * 60)
+    print("COMBINING MANGO CSV FILES")
+    print("=" * 60)
+
+    # Step 1: Get CSV files
+    print("\n[1/6] Scanning directory for CSV files...")
+    csv_files = get_csv_files_from_directory(directory)
+    if not csv_files:
+        raise ValueError(f"No CSV files found in directory: {directory}")
+
+    # Step 2: Validate each file
+    print("\n[2/6] Validating CSV files...")
+    valid_files = [f for f in csv_files if validate_mango_csv(f)]
+    if not valid_files:
+        raise ValueError("No valid mango CSV files found after validation.")
+    print(f"  {len(valid_files)}/{len(csv_files)} file(s) passed validation")
+
+    # Step 3: Read all CSVs and check column consistency
+    print("\n[3/6] Reading files and checking column consistency...")
+    dfs = []
+    reference_columns = None
+    reference_filename = None
+    mismatched = []
+
+    for filepath in valid_files:
+        df = pd.read_csv(filepath)
+        cols = list(df.columns)
+
+        if reference_columns is None:
+            reference_columns = cols
+            reference_filename = os.path.basename(filepath)
+        elif set(cols) != set(reference_columns):
+            mismatched.append(os.path.basename(filepath))
+        else:
+            pass  # columns match
+
+        dfs.append(df)
+
+    if mismatched:
+        raise ValueError(
+            f"Column mismatch detected. Reference file: '{reference_filename}' "
+            f"with columns {reference_columns}. "
+            f"Mismatched file(s): {mismatched}"
+        )
+    print(f"  All {len(valid_files)} file(s) have consistent columns: {reference_columns}")
+
+    # Step 4: Concatenate
+    print("\n[4/6] Concatenating files...")
+    combined = pd.concat(dfs, ignore_index=True)
+    print(f"  Combined row count: {len(combined)}")
+
+    # Step 5: Remove duplicate timestamps, sort ascending
+    print("\n[5/6] Removing duplicate timestamps and sorting...")
+    before_dedup = len(combined)
+    combined = combined.drop_duplicates(subset=['timestamp'], keep='first')
+    removed = before_dedup - len(combined)
+    print(f"  Removed {removed} duplicate row(s), {len(combined)} rows remaining")
+    combined = combined.sort_values('timestamp').reset_index(drop=True)
+    print("  Sorted by ascending timestamp")
+
+    # Step 6: Determine date range and save
+    print("\n[6/6] Saving output...")
+    ts = pd.to_datetime(combined['timestamp'], utc=True, errors='coerce')
+    min_date = ts.min().date().strftime('%Y-%m-%d')
+    max_date = ts.max().date().strftime('%Y-%m-%d')
+
+    out_dir = output_dir if output_dir else os.path.dirname(os.path.abspath(valid_files[0]))
+    output_filename = f"{building}_{meter_name}_{min_date}_to_{max_date}.csv"
+    output_path = os.path.join(out_dir, output_filename)
+
+    combined.to_csv(output_path, index=False, quoting=csv.QUOTE_NONNUMERIC, float_format='%.10g')
+
+    print(f"  Output saved to: {output_path}")
+    print(f"  Final shape: {len(combined)} rows, {len(combined.columns)} columns")
+    print(f"  Date range: {min_date} to {max_date}")
+    print("=" * 60)
+    print("\nCombine complete!")
+
+
 def get_user_metadata(args):
     """
     Get metadata from command-line args or prompt user interactively.
@@ -350,6 +476,12 @@ def parse_arguments():
         type=str,
         help='Path to directory containing CSV files (processes all CSV files, non-recursive)'
     )
+    input_group.add_argument(
+        '-cd', '--combine-dir',
+        type=str,
+        dest='combine_dir',
+        help='Path to directory containing mango CSV files to combine into a single output file'
+    )
 
     parser.add_argument(
         '-b', '--building',
@@ -361,6 +493,12 @@ def parse_arguments():
         '-d', '--device',
         type=str,
         help='Device identifier (e.g., MAIN_device)'
+    )
+
+    parser.add_argument(
+        '-m', '--meter',
+        type=str,
+        help='Meter name for combined output filename (used with --combine-dir)'
     )
 
     parser.add_argument(
@@ -378,7 +516,7 @@ def parse_arguments():
     args = parser.parse_args()
 
     # If no input provided, return None to trigger interactive mode
-    if args.input is None and args.directory is None:
+    if args.input is None and args.directory is None and args.combine_dir is None:
         return None
 
     return args
@@ -421,6 +559,15 @@ if __name__ == "__main__":
                 print("\nExiting: No valid CSV files found.")
                 sys.exit(1)
 
+        elif args and args.combine_dir:
+            # Combine mode (CLI)
+            out_dir = args.output if args.output else None
+            if out_dir and not os.path.exists(out_dir):
+                os.makedirs(out_dir)
+            building, meter_name = get_combine_metadata(args)
+            combine_mango_csv_files(args.combine_dir, building, meter_name, output_dir=out_dir)
+            sys.exit(0)
+
         else:
             # Interactive mode
             print("Interactive Mode")
@@ -429,9 +576,10 @@ if __name__ == "__main__":
             print("Choose input mode:")
             print("  1. Process a single file")
             print("  2. Process all CSV files in a directory")
+            print("  3. Combine multiple mango CSV files from a directory into one")
             print()
 
-            choice = input("Enter choice (1-2): ").strip()
+            choice = input("Enter choice (1-3): ").strip()
 
             if choice == '1':
                 # Single file mode
@@ -457,6 +605,14 @@ if __name__ == "__main__":
                 if not files_to_process:
                     print("\nExiting: No valid CSV files found.")
                     sys.exit(1)
+
+            elif choice == '3':
+                # Combine mode
+                input_dir = input("\nEnter directory path containing mango CSV files: ").strip()
+                building, meter_name = get_combine_metadata(None)
+                out_dir = None
+                combine_mango_csv_files(input_dir, building, meter_name, output_dir=out_dir)
+                sys.exit(0)
 
             else:
                 print("\nInvalid choice. Exiting.")
