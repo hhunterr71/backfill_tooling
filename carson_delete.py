@@ -489,6 +489,45 @@ def collect_one_off_entry():
 # ------------------------------------
 # Combined summary file generation
 # ------------------------------------
+def _parse_summary_file(filepath):
+    """
+    Parse an individual *_delete_summary.txt file.
+    Returns:
+        metadata_lines : list of 'Key : Value' lines (Building ID through Status)
+        output_lines   : command output lines with 'INFO: ' prefix stripped
+    """
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.read().strip().splitlines()
+
+    metadata_lines = []
+    output_lines = []
+    in_run_command = False
+    in_output = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('===') or stripped.startswith('---'):
+            continue
+        if stripped == 'Run Command:':
+            in_run_command = True
+            continue
+        if stripped == 'Command Output:':
+            in_run_command = False
+            in_output = True
+            continue
+        if in_run_command:
+            continue
+        if in_output:
+            cleaned = stripped[6:] if stripped.startswith('INFO: ') else stripped
+            if cleaned:
+                output_lines.append(cleaned)
+        else:
+            if stripped:
+                metadata_lines.append(stripped)
+
+    return metadata_lines, output_lines
+
+
 def combine_summary_files(directory, output_path):
     """
     Recursively find all *_delete_summary.txt files under directory,
@@ -515,11 +554,15 @@ def combine_summary_files(directory, output_path):
         out.write("=" * 60 + "\n")
 
         for idx, filepath in enumerate(summary_files, 1):
-            out.write(f"\n\n[{idx}/{len(summary_files)}] {os.path.relpath(filepath, directory)}\n")
-            out.write("-" * 60 + "\n")
-            with open(filepath, 'r', encoding='utf-8') as f:
-                out.write(f.read().strip())
-            out.write("\n")
+            metadata_lines, output_lines = _parse_summary_file(filepath)
+            out.write(f"\n[{idx}/{len(summary_files)}]\n")
+            for line in metadata_lines:
+                out.write(line + "\n")
+            out.write("```\n")
+            out.write("Command Output:\n")
+            for line in output_lines:
+                out.write(line + "\n")
+            out.write("```\n")
 
     return len(summary_files)
 
@@ -574,10 +617,10 @@ if __name__ == "__main__":
 
                 valid_choice = False
                 while not valid_choice:
-                    choice = input("Enter choice (0-2): ").strip()
+                    choice = input("Enter choice (1-3): ").strip()
                     check_special_input(choice)
 
-                    if choice == '0':
+                    if choice == '1':
                         folder = input("\nEnter folder to save template (leave blank for current directory): ").strip().strip('"').strip("'")
                         check_special_input(folder) if folder else None
                         if not folder:
@@ -585,10 +628,10 @@ if __name__ == "__main__":
                         filename = input("Template filename (leave blank for 'carson_delete_template.csv'): ").strip().strip('"').strip("'")
                         check_special_input(filename) if filename else None
                         generate_template_file(folder, filename or None)
-                        print("\nTemplate created. Fill it in and re-run with option 1.")
+                        print("\nTemplate created. Fill it in and re-run with option 2.")
                         sys.exit(0)
 
-                    elif choice == '1':
+                    elif choice == '2':
                         valid_file = False
                         while not valid_file:
                             path = input("\nEnter path to CSV or XLSX file: ").strip().strip('"').strip("'")
@@ -602,12 +645,12 @@ if __name__ == "__main__":
                                 print(f"Loaded {len(entries)} entry/entries from file.")
                         valid_choice = True
 
-                    elif choice == '2':
+                    elif choice == '3':
                         entries = [collect_one_off_entry()]
                         valid_choice = True
 
                     else:
-                        print("Invalid choice. Please enter 0, 1, or 2.\n")
+                        print("Invalid choice. Please enter 1, 2, or 3.\n")
 
             # ---- Determine output directory ----
             if args and args.output:
