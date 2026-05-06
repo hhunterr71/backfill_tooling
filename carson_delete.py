@@ -393,7 +393,7 @@ def prepare_entry(building_id, meter_name, external_id, start_date, end_date, ou
     # Use just the date portion (YYYY-MM-DD) for the folder name
     start_slug = start_date.strip().split(' ')[0].split('T')[0]
     end_slug = end_date.strip().split(' ')[0].split('T')[0]
-    folder_name = f"{building_id}_{meter_name}_{start_slug}_{end_slug}"
+    folder_name = f"{building_id}_{meter_name}_{external_id}_{start_slug}_{end_slug}"
     entry_dir = os.path.join(output_dir, folder_name)
 
     if not os.path.exists(entry_dir):
@@ -567,16 +567,14 @@ if __name__ == "__main__":
                 print("(Type 'quit' at any prompt to exit, 'reset' to start over)")
                 print()
                 print("Choose input mode:")
-                print("  0. Generate a blank template CSV (with example row)")
-                print("  1. Load a batch CSV/XLSX file")
-                print("  2. Enter a single meter manually")
-                print("  3. Test Run environment setup only (p4 g4d -f backfill && g4 sync)")
-                print("  4. Combine all summary files in a directory into one report")
+                print("  1. Generate batch CSV template")
+                print("  2. Process batch CSV/XLSX file")
+                print("  3. Enter a single meter manually")
                 print()
 
                 valid_choice = False
                 while not valid_choice:
-                    choice = input("Enter choice (0-4): ").strip()
+                    choice = input("Enter choice (0-2): ").strip()
                     check_special_input(choice)
 
                     if choice == '0':
@@ -608,39 +606,8 @@ if __name__ == "__main__":
                         entries = [collect_one_off_entry()]
                         valid_choice = True
 
-                    elif choice == '3':
-                        print()
-                        cwd = run_prerequisites()
-                        if cwd is None:
-                            print("\nEnvironment setup failed.")
-                        else:
-                            print("\nEnvironment setup complete. You may now re-run with option 1 or 2.")
-                        sys.exit(0)
-
-                    elif choice == '4':
-                        print()
-                        folder = input("Enter directory containing summary files: ").strip().strip('"').strip("'")
-                        check_special_input(folder)
-                        if not folder:
-                            folder = os.getcwd()
-                        if not os.path.isdir(folder):
-                            print(f"ERROR: '{folder}' is not a valid directory.\n")
-                            continue
-                        default_name = "combined_delete_summary.txt"
-                        filename = input(f"Output filename (leave blank for '{default_name}'): ").strip().strip('"').strip("'")
-                        check_special_input(filename) if filename else None
-                        if not filename:
-                            filename = default_name
-                        output_path = os.path.join(folder, filename)
-                        count = combine_summary_files(folder, output_path)
-                        if count == 0:
-                            print("\nNo *_delete_summary.txt files found in that directory.")
-                        else:
-                            print(f"\nCombined {count} summary file(s) into: {output_path}")
-                        sys.exit(0)
-
                     else:
-                        print("Invalid choice. Please enter 0, 1, 2, 3, or 4.\n")
+                        print("Invalid choice. Please enter 0, 1, or 2.\n")
 
             # ---- Determine output directory ----
             if args and args.output:
@@ -765,6 +732,12 @@ if __name__ == "__main__":
 
             print(f"\nOutput saved to: {output_dir}/")
             print("=" * 60)
+
+            # ---- Auto-generate combined summary report ----
+            combined_path = os.path.join(output_dir, "combined_delete_summary.txt")
+            count = combine_summary_files(output_dir, combined_path)
+            if count > 0:
+                print(f"\nCombined summary ({count} entry/entries): {combined_path}")
 
             break
 
