@@ -558,8 +558,8 @@ def combine_summary_files(directory, output_path):
             out.write(f"\n[{idx}/{len(summary_files)}]\n")
             for line in metadata_lines:
                 out.write(line + "\n")
-            out.write("```\n")
             out.write("Command Output:\n")
+            out.write("```\n")
             for line in output_lines:
                 out.write(line + "\n")
             out.write("```\n")
