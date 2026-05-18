@@ -140,6 +140,191 @@ def add_metadata_columns(df, building, device, external_id):
     print(f"Added metadata: building={building}, device={device}, externalID={external_id if external_id else '(none)'}")
     return df
 
+def detect_meter_name(columns):
+    """
+    Detect meter name from column names formatted as 'meter_name - pointName'.
+    Prepends 'power-meter-' for electrical meters or 'utility-' for gas/water meters
+    based on the point names found in the columns. Falls back to prompting the user
+    if the meter type cannot be determined automatically.
+
+    Electrical indicators: kW, kWh, kVAR, kVA, PF, Amps, Volts, Hz, etc.
+    Utility indicators: CCF, Therms, BTU, Gallons, GPM, MCF, etc.
+
+    Args:
+        columns: List of column names
+    Returns:
+        Detected meter name string with type prefix, or None if raw name not detectable
+    """
+    ELECTRICAL_KEYWORDS = {'kw', 'kwh', 'kvar', 'kva', 'pf', 'power factor', 'amp', 'amps',
+                           'volt', 'volts', 'hz', 'current', 'voltage', 'demand',
+                           'real power', 'reactive power', 'apparent power'}
+    UTILITY_KEYWORDS = {'ccf', 'therm', 'therms', 'btu', 'gallon', 'gallons', 'gpm',
+                        'mcf', 'cubic feet', 'gj', 'natural gas', 'water', 'gas'}
+
+    raw_name = None
+    point_names = []
+
+    for col in columns:
+        if col != 'timestamp' and ' - ' in col:
+            prefix, point = col.split(' - ', 1)
+            point_names.append(point.strip().lower())
+            if raw_name is None:
+                raw_name = prefix.strip()
+
+    if raw_name is None:
+        return None
+
+    # Check for multiple distinct meter name prefixes
+    all_prefixes = set()
+    for col in columns:
+        if col != 'timestamp' and ' - ' in col:
+            all_prefixes.add(col.split(' - ', 1)[0].strip())
+    if len(all_prefixes) > 1:
+        from collections import Counter
+        prefix_counts = Counter(
+            col.split(' - ', 1)[0].strip()
+            for col in columns
+            if col != 'timestamp' and ' - ' in col
+        )
+        raw_name = prefix_counts.most_common(1)[0][0]
+        print(f"  WARNING: Multiple meter name prefixes detected: {all_prefixes}. Using most common: '{raw_name}'")
+
+    # Classify meter type from point names
+    is_electrical = any(any(kw in pn for kw in ELECTRICAL_KEYWORDS) for pn in point_names)
+    is_utility = any(any(kw in pn for kw in UTILITY_KEYWORDS) for pn in point_names)
+
+    if is_electrical and not is_utility:
+        type_prefix = 'power-meter-'
+        print(f"  Detected meter type: electrical (prefix: '{type_prefix}')")
+    elif is_utility and not is_electrical:
+        type_prefix = 'utility-'
+        print(f"  Detected meter type: gas/water (prefix: '{type_prefix}')")
+    else:
+        # Ambiguous or unrecognized - prompt user
+        print(f"  Could not auto-detect meter type from point names: {[col.split(' - ', 1)[1].strip() for col in columns if col != 'timestamp' and ' - ' in col]}")
+        print("  Select meter type:")
+        print("    1. Electrical (power-meter-)")
+        print("    2. Gas / Water (utility-)")
+        choice = input("  Enter choice (1 or 2): ").strip()
+        type_prefix = 'power-meter-' if choice == '1' else 'utility-'
+
+    full_name = type_prefix + raw_name
+    print(f"  Detected meter name: '{full_name}'")
+    return full_name
+
+def read_mapping_csv(mapping_path):
+    """
+    Read and validate a mapping CSV that drives batch-combine processing.
+
+    Expected columns: building, meter_name, start_date, end_date
+    Optional column: externalID (filled with empty string if absent)
+
+    Args:
+        mapping_path: Path to the mapping CSV file
+    Returns:
+        List of dicts, one per row
+    Raises:
+        ValueError: If required columns are missing or the file cannot be read
+    """
+    if not os.path.exists(mapping_path):
+        raise ValueError(f"Mapping CSV not found: {mapping_path}")
+
+    try:
+        df = pd.read_csv(mapping_path, dtype=str).fillna('')
+    except Exception as e:
+        raise ValueError(f"Failed to read mapping CSV: {e}")
+
+    required = {'building', 'meter_name', 'start_date', 'end_date'}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Mapping CSV is missing required columns: {missing}")
+
+    if 'externalID' not in df.columns:
+        df['externalID'] = ''
+
+    rows = df[['building', 'meter_name', 'externalID', 'start_date', 'end_date']].to_dict('records')
+    print(f"  Loaded {len(rows)} mapping row(s) from: {os.path.basename(mapping_path)}")
+    return rows
+
+
+def detect_meter_name_from_file(filepath):
+    """
+    Detect the meter name from a CSV file by reading only its headers.
+    Uses nrows=0 to avoid loading the full file.
+
+    Args:
+        filepath: Path to CSV file
+    Returns:
+        Detected meter name string with type prefix, or None if not detectable
+    """
+    try:
+        df_headers = pd.read_csv(filepath, nrows=0)
+        return detect_meter_name(list(df_headers.columns))
+    except Exception as e:
+        print(f"  WARNING: Could not read headers from {os.path.basename(filepath)}: {e}")
+        return None
+
+
+def group_files_by_meter(csv_files):
+    """
+    Group CSV files by their detected meter name (read from column headers only).
+
+    Args:
+        csv_files: List of absolute paths to CSV files
+    Returns:
+        Dict mapping meter_name -> list of file paths
+    """
+    groups = {}
+    skipped = []
+
+    for filepath in csv_files:
+        meter_name = detect_meter_name_from_file(filepath)
+        if meter_name is None:
+            print(f"  WARNING: Could not detect meter name for {os.path.basename(filepath)} — skipping")
+            skipped.append(filepath)
+            continue
+        groups.setdefault(meter_name, []).append(filepath)
+
+    print(f"\n  Detected {len(groups)} distinct meter group(s):")
+    for name, files in groups.items():
+        print(f"    '{name}': {len(files)} file(s)")
+    if skipped:
+        print(f"  Skipped {len(skipped)} file(s) with undetectable meter names")
+
+    return groups
+
+
+def trim_to_date_window(df, start_date, end_date):
+    """
+    Filter DataFrame rows to those whose timestamp falls within [start_date, end_date] inclusive,
+    evaluated in America/Los_Angeles timezone.
+
+    Operates on raw timestamps (before the format_timestamps pipeline step).
+
+    Args:
+        df: DataFrame with a 'timestamp' column (raw ISO8601 strings)
+        start_date: Start date string in YYYY-MM-DD format (inclusive)
+        end_date: End date string in YYYY-MM-DD format (inclusive)
+    Returns:
+        Filtered DataFrame (preserves original column format)
+    """
+    ts_utc = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+    ts_la = ts_utc.dt.tz_convert('America/Los_Angeles')
+
+    start = pd.Timestamp(start_date, tz='America/Los_Angeles')
+    end = pd.Timestamp(end_date, tz='America/Los_Angeles') + pd.Timedelta(days=1)
+
+    mask = (ts_la >= start) & (ts_la < end)
+    result = df[mask].reset_index(drop=True)
+
+    if result.empty:
+        print(f"  WARNING: No rows fall within date window {start_date} to {end_date}")
+    else:
+        print(f"  Trimmed to {len(result)} row(s) within {start_date} to {end_date}")
+
+    return result
+
+
 def get_csv_files_from_directory(directory_path):
     """
     Get all CSV files from a directory (non-recursive).
@@ -242,15 +427,12 @@ def get_combine_metadata(args):
     else:
         building = args.building
 
-    meter_name = input("Enter meter name (required): ").strip()
-    while not meter_name:
-        print("Meter name is required.")
-        meter_name = input("Enter meter name (required): ").strip()
-
-    return building, meter_name
+    meter_name = input("Enter meter name (press Enter to auto-detect from columns): ").strip()
+    # Return None to signal auto-detection if user skips
+    return building, meter_name if meter_name else None
 
 
-def combine_mango_csv_files(directory, building, meter_name, output_dir=None):
+def combine_mango_csv_files(directory, building, meter_name=None, output_dir=None):
     """
     Combine all mango CSV files in a directory into a single deduped, sorted CSV.
 
@@ -311,6 +493,16 @@ def combine_mango_csv_files(directory, building, meter_name, output_dir=None):
         )
     print(f"  All {len(valid_files)} file(s) have consistent columns: {reference_columns}")
 
+    # Auto-detect meter name from column names if not provided
+    if meter_name is None:
+        print("\n  Auto-detecting meter name from column names...")
+        meter_name = detect_meter_name(reference_columns)
+        if meter_name is None:
+            raise ValueError(
+                "Could not detect meter name from column names (no 'meter_name - pointName' pattern found). "
+                "Provide a meter name with --meter or interactively."
+            )
+
     # Step 4: Concatenate
     print("\n[4/6] Concatenating files...")
     combined = pd.concat(dfs, ignore_index=True)
@@ -342,6 +534,152 @@ def combine_mango_csv_files(directory, building, meter_name, output_dir=None):
     print(f"  Date range: {min_date} to {max_date}")
     print("=" * 60)
     print("\nCombine complete!")
+
+
+def get_batch_combine_inputs(args):
+    """
+    Get the raw-files directory and mapping CSV path for batch-combine mode.
+
+    Args:
+        args: Parsed command-line arguments (or None for interactive mode)
+    Returns:
+        Tuple of (directory_path, mapping_csv_path)
+    """
+    if args and getattr(args, 'batch_combine', None) and getattr(args, 'mapping', None):
+        return args.batch_combine, args.mapping
+
+    print("\n" + "=" * 60)
+    print("BATCH COMBINE INPUT")
+    print("=" * 60)
+
+    directory = input("Enter directory path containing raw CSV files: ").strip()
+    while not directory:
+        print("Directory path is required.")
+        directory = input("Enter directory path containing raw CSV files: ").strip()
+
+    mapping_path = input("Enter path to mapping CSV: ").strip()
+    while not mapping_path:
+        print("Mapping CSV path is required.")
+        mapping_path = input("Enter path to mapping CSV: ").strip()
+
+    return directory, mapping_path
+
+
+def batch_combine_from_mapping(directory, mapping_path, output_dir=None):
+    """
+    Batch-combine workflow: detect meter names from a flat directory of raw CSV files,
+    match against a mapping CSV, and for each mapping row combine + trim + reformat the data.
+
+    Mapping CSV columns: building, meter_name, externalID (optional), start_date, end_date
+    Output: one reformatted CSV per mapping row, named:
+        {building}_{meter_name}_{externalID}_{start_date}_{end_date}_mango.csv
+        (externalID segment omitted if empty)
+
+    Args:
+        directory: Path to flat directory of raw Mango CSV files
+        mapping_path: Path to the mapping CSV file
+        output_dir: Directory to write output files (defaults to input directory)
+    """
+    print("\n" + "=" * 60)
+    print("BATCH COMBINE FROM MAPPING CSV")
+    print("=" * 60)
+
+    # Step 1: Read mapping CSV
+    print("\n[1/5] Reading mapping CSV...")
+    mapping_rows = read_mapping_csv(mapping_path)
+
+    # Step 2: Scan directory for CSV files
+    print("\n[2/5] Scanning directory for CSV files...")
+    csv_files = get_csv_files_from_directory(directory)
+    if not csv_files:
+        raise ValueError(f"No CSV files found in directory: {directory}")
+
+    # Step 3: Group files by detected meter name (reads headers only)
+    print("\n[3/5] Detecting meter names and grouping files...")
+    meter_groups = group_files_by_meter(csv_files)
+
+    # Step 4: Combine files once per unique meter_name referenced in the mapping
+    print("\n[4/5] Combining files per meter...")
+    unique_meters = list(dict.fromkeys(row['meter_name'] for row in mapping_rows))
+    combined_by_meter = {}
+
+    for meter_name in unique_meters:
+        files = meter_groups.get(meter_name)
+        if not files:
+            print(f"  WARNING: No files detected for meter '{meter_name}' — skipping all mapping rows for this meter")
+            continue
+
+        print(f"\n  Combining {len(files)} file(s) for '{meter_name}'...")
+        dfs = []
+        for filepath in files:
+            if validate_mango_csv(filepath):
+                dfs.append(pd.read_csv(filepath))
+
+        if not dfs:
+            print(f"  WARNING: No valid files for '{meter_name}' — skipping")
+            continue
+
+        combined = pd.concat(dfs, ignore_index=True)
+        before = len(combined)
+        combined = combined.drop_duplicates(subset=['timestamp'], keep='first')
+        combined = combined.sort_values('timestamp').reset_index(drop=True)
+        print(f"  Combined: {len(combined)} rows ({before - len(combined)} duplicates removed)")
+        combined_by_meter[meter_name] = combined
+
+    # Step 5: Process each mapping row
+    print("\n[5/5] Processing mapping rows...")
+    out_dir = output_dir if output_dir else os.path.dirname(os.path.abspath(csv_files[0]))
+
+    created = 0
+    skipped = 0
+
+    for idx, row in enumerate(mapping_rows, 1):
+        meter_name = row['meter_name']
+        building = row['building']
+        external_id = row.get('externalID', '').strip()
+        start_date = row['start_date'].strip()
+        end_date = row['end_date'].strip()
+
+        print(f"\n  [{idx}/{len(mapping_rows)}] {meter_name} | {start_date} to {end_date}" +
+              (f" | externalID={external_id}" if external_id else ""))
+
+        if meter_name not in combined_by_meter:
+            print(f"    Skipping (no combined data for this meter)")
+            skipped += 1
+            continue
+
+        # Trim to date window
+        df = trim_to_date_window(combined_by_meter[meter_name].copy(), start_date, end_date)
+        if df.empty:
+            print(f"    Skipping (no data in date window)")
+            skipped += 1
+            continue
+
+        # Run the full reformatting pipeline
+        df = remove_rendered_columns(df)
+        df = rename_point_columns(df)
+        df = format_timestamps(df)
+        df = restructure_to_paired_columns(df)
+        df = add_metadata_columns(df, building, device=meter_name, external_id=external_id)
+
+        # Build output filename
+        ext_segment = f"_{external_id}" if external_id else ""
+        output_filename = f"{building}_{meter_name}{ext_segment}_{start_date}_{end_date}_mango.csv"
+        output_path = os.path.join(out_dir, output_filename)
+
+        df.to_csv(output_path, index=False, quoting=csv.QUOTE_NONNUMERIC, float_format='%.10g')
+        print(f"    Saved: {output_filename}  ({len(df)} rows)")
+        created += 1
+
+    # Summary
+    print("\n" + "=" * 60)
+    print("BATCH COMBINE SUMMARY")
+    print("=" * 60)
+    print(f"  Mapping rows processed : {len(mapping_rows)}")
+    print(f"  Output files created   : {created}")
+    print(f"  Rows skipped           : {skipped}")
+    print("=" * 60)
+    print("\nBatch combine complete!")
 
 
 def get_user_metadata(args):
@@ -482,6 +820,12 @@ def parse_arguments():
         dest='combine_dir',
         help='Path to directory containing mango CSV files to combine into a single output file'
     )
+    input_group.add_argument(
+        '-bc', '--batch-combine',
+        type=str,
+        dest='batch_combine',
+        help='Path to flat directory of raw CSV files for batch-combine mode (requires --mapping)'
+    )
 
     parser.add_argument(
         '-b', '--building',
@@ -502,6 +846,12 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        '--mapping',
+        type=str,
+        help='Path to mapping CSV file (used with --batch-combine)'
+    )
+
+    parser.add_argument(
         '-e', '--externalid',
         type=str,
         help='External device ID (optional)'
@@ -516,7 +866,7 @@ def parse_arguments():
     args = parser.parse_args()
 
     # If no input provided, return None to trigger interactive mode
-    if args.input is None and args.directory is None and args.combine_dir is None:
+    if args.input is None and args.directory is None and args.combine_dir is None and args.batch_combine is None:
         return None
 
     return args
@@ -568,6 +918,17 @@ if __name__ == "__main__":
             combine_mango_csv_files(args.combine_dir, building, meter_name, output_dir=out_dir)
             sys.exit(0)
 
+        elif args and args.batch_combine:
+            # Batch-combine mode (CLI)
+            if not args.mapping:
+                print("ERROR: --batch-combine requires --mapping <path-to-mapping-csv>")
+                sys.exit(1)
+            out_dir = args.output if args.output else None
+            if out_dir and not os.path.exists(out_dir):
+                os.makedirs(out_dir)
+            batch_combine_from_mapping(args.batch_combine, args.mapping, output_dir=out_dir)
+            sys.exit(0)
+
         else:
             # Interactive mode
             print("Interactive Mode")
@@ -577,9 +938,10 @@ if __name__ == "__main__":
             print("  1. Process a single file")
             print("  2. Process all CSV files in a directory")
             print("  3. Combine multiple mango CSV files from a directory into one")
+            print("  4. Batch combine from mapping CSV (auto-detect meters, trim to date windows)")
             print()
 
-            choice = input("Enter choice (1-3): ").strip()
+            choice = input("Enter choice (1-4): ").strip()
 
             if choice == '1':
                 # Single file mode
@@ -612,6 +974,12 @@ if __name__ == "__main__":
                 building, meter_name = get_combine_metadata(None)
                 out_dir = None
                 combine_mango_csv_files(input_dir, building, meter_name, output_dir=out_dir)
+                sys.exit(0)
+
+            elif choice == '4':
+                # Batch-combine from mapping CSV
+                directory, mapping_path = get_batch_combine_inputs(None)
+                batch_combine_from_mapping(directory, mapping_path)
                 sys.exit(0)
 
             else:
