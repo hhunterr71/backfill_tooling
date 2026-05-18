@@ -4,6 +4,7 @@ import argparse
 import sys
 import pytz
 import csv
+import shutil
 
 def format_timestamps(df):
     """
@@ -536,6 +537,117 @@ def combine_mango_csv_files(directory, building, meter_name=None, output_dir=Non
     print("\nCombine complete!")
 
 
+def flatten_and_rename_directory(root_dir):
+    """
+    Flatten all subdirectories in root_dir by moving every CSV file into root_dir,
+    renaming each file to mango_export_001.csv, mango_export_002.csv, etc.
+    Subdirectories are deleted after their CSVs are moved (only if empty).
+
+    Processing order: subdirectory files first (sorted by path), then any files
+    already at root level — so root-level files get the highest numbers.
+
+    Args:
+        root_dir: Path to the root directory to flatten
+    """
+    print("\n" + "=" * 60)
+    print("FLATTEN AND RENAME DIRECTORY")
+    print("=" * 60)
+
+    root_dir = os.path.abspath(root_dir)
+
+    if not os.path.exists(root_dir):
+        print(f"ERROR: Directory does not exist: {root_dir}")
+        return
+    if not os.path.isdir(root_dir):
+        print(f"ERROR: Path is not a directory: {root_dir}")
+        return
+
+    # Collect all CSV files: subdirectory files first, then root-level files
+    subdir_files = []
+    root_files = []
+
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        # Sort subdirectory traversal order for determinism
+        dirnames.sort()
+        for filename in sorted(filenames):
+            if filename.lower().endswith('.csv'):
+                full_path = os.path.join(dirpath, filename)
+                if os.path.normpath(dirpath) == os.path.normpath(root_dir):
+                    root_files.append(full_path)
+                else:
+                    subdir_files.append(full_path)
+
+    all_files = subdir_files + root_files
+    total = len(all_files)
+
+    if total == 0:
+        print("No CSV files found in directory tree.")
+        return
+
+    print(f"\nFound {total} CSV file(s) across all subdirectories")
+    print(f"  Files in subdirectories : {len(subdir_files)}")
+    print(f"  Files at root level     : {len(root_files)}")
+
+    # Determine zero-pad width (at least 3 digits)
+    width = max(3, len(str(total)))
+
+    print(f"\nMoving and renaming files...")
+    moved = 0
+    counter = 1
+
+    for source in all_files:
+        # Find the next free slot (dest might already exist if a root file happens
+        # to be named mango_export_XXX.csv from a previous run)
+        while True:
+            new_name = f"mango_export_{counter:0{width}d}.csv"
+            dest = os.path.join(root_dir, new_name)
+            # Skip the slot if it's occupied by a file we haven't processed yet
+            if not os.path.exists(dest) or os.path.normpath(dest) == os.path.normpath(source):
+                break
+            counter += 1
+
+        original_display = os.path.relpath(source, root_dir)
+
+        if os.path.normpath(source) == os.path.normpath(dest):
+            print(f"  Already named correctly : {new_name}")
+        else:
+            shutil.move(source, dest)
+            print(f"  Moved: {original_display}  ->  {new_name}")
+            moved += 1
+
+        counter += 1
+
+    # Remove subdirectories bottom-up
+    print(f"\nRemoving subdirectories...")
+    removed_dirs = 0
+    failed_dirs = []
+
+    for dirpath, dirnames, filenames in os.walk(root_dir, topdown=False):
+        if os.path.normpath(dirpath) == os.path.normpath(root_dir):
+            continue  # Never remove root itself
+        try:
+            os.rmdir(dirpath)
+            print(f"  Removed: {os.path.relpath(dirpath, root_dir)}/")
+            removed_dirs += 1
+        except OSError:
+            remaining = os.listdir(dirpath)
+            print(f"  WARNING: Could not remove {os.path.relpath(dirpath, root_dir)}/ "
+                  f"({len(remaining)} non-CSV file(s) remain: {remaining})")
+            failed_dirs.append(dirpath)
+
+    # Summary
+    print("\n" + "=" * 60)
+    print("FLATTEN SUMMARY")
+    print("=" * 60)
+    print(f"  Total CSV files found   : {total}")
+    print(f"  Files moved/renamed     : {moved}")
+    print(f"  Directories removed     : {removed_dirs}")
+    if failed_dirs:
+        print(f"  Directories not removed : {len(failed_dirs)} (contain non-CSV files)")
+    print("=" * 60)
+    print("\nFlatten complete!")
+
+
 def get_batch_combine_inputs(args):
     """
     Get the raw-files directory and mapping CSV path for batch-combine mode.
@@ -826,6 +938,12 @@ def parse_arguments():
         dest='batch_combine',
         help='Path to flat directory of raw CSV files for batch-combine mode (requires --mapping)'
     )
+    input_group.add_argument(
+        '-fl', '--flatten',
+        type=str,
+        dest='flatten',
+        help='Flatten all subdirectories into root_dir and rename every CSV to mango_export_###.csv'
+    )
 
     parser.add_argument(
         '-b', '--building',
@@ -866,7 +984,7 @@ def parse_arguments():
     args = parser.parse_args()
 
     # If no input provided, return None to trigger interactive mode
-    if args.input is None and args.directory is None and args.combine_dir is None and args.batch_combine is None:
+    if args.input is None and args.directory is None and args.combine_dir is None and args.batch_combine is None and args.flatten is None:
         return None
 
     return args
@@ -929,6 +1047,11 @@ if __name__ == "__main__":
             batch_combine_from_mapping(args.batch_combine, args.mapping, output_dir=out_dir)
             sys.exit(0)
 
+        elif args and args.flatten:
+            # Flatten mode (CLI)
+            flatten_and_rename_directory(args.flatten)
+            sys.exit(0)
+
         else:
             # Interactive mode
             print("Interactive Mode")
@@ -939,9 +1062,10 @@ if __name__ == "__main__":
             print("  2. Process all CSV files in a directory")
             print("  3. Combine multiple mango CSV files from a directory into one")
             print("  4. Batch combine from mapping CSV (auto-detect meters, trim to date windows)")
+            print("  5. Flatten subdirectories and rename all CSV files to standardized names")
             print()
 
-            choice = input("Enter choice (1-4): ").strip()
+            choice = input("Enter choice (1-5): ").strip()
 
             if choice == '1':
                 # Single file mode
@@ -980,6 +1104,12 @@ if __name__ == "__main__":
                 # Batch-combine from mapping CSV
                 directory, mapping_path = get_batch_combine_inputs(None)
                 batch_combine_from_mapping(directory, mapping_path)
+                sys.exit(0)
+
+            elif choice == '5':
+                # Flatten subdirectories and rename
+                input_dir = input("\nEnter root directory path to flatten: ").strip()
+                flatten_and_rename_directory(input_dir)
                 sys.exit(0)
 
             else:
