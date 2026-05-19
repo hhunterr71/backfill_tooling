@@ -676,6 +676,24 @@ def flatten_and_rename_directory(root_dir):
     print("\nFlatten complete!")
 
 
+def _find_mapping_csv(directory):
+    """
+    Return the path to a single CSV file found directly inside directory
+    (non-recursive, ignoring any raw/ subdir), or None if zero or multiple exist.
+    Used to auto-detect the mapping CSV when the user provides a project root.
+    """
+    try:
+        root = os.path.abspath(directory)
+        candidates = [
+            os.path.join(root, f)
+            for f in os.listdir(root)
+            if f.lower().endswith('.csv') and os.path.isfile(os.path.join(root, f))
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+    except Exception:
+        return None
+
+
 def get_batch_combine_inputs(args):
     """
     Get the raw-files directory and mapping CSV path for batch-combine mode.
@@ -692,15 +710,20 @@ def get_batch_combine_inputs(args):
     print("BATCH COMBINE INPUT")
     print("=" * 60)
 
-    directory = input("Enter directory path containing raw CSV files: ").strip()
+    directory = input("Enter project directory path: ").strip()
     while not directory:
         print("Directory path is required.")
-        directory = input("Enter directory path containing raw CSV files: ").strip()
+        directory = input("Enter project directory path: ").strip()
 
-    mapping_path = input("Enter path to mapping CSV: ").strip()
-    while not mapping_path:
-        print("Mapping CSV path is required.")
+    auto_mapping = _find_mapping_csv(directory)
+    if auto_mapping:
+        print(f"  Mapping CSV auto-detected: {os.path.basename(auto_mapping)}")
+        mapping_path = auto_mapping
+    else:
         mapping_path = input("Enter path to mapping CSV: ").strip()
+        while not mapping_path:
+            print("Mapping CSV path is required.")
+            mapping_path = input("Enter path to mapping CSV: ").strip()
 
     return directory, mapping_path
 
@@ -723,6 +746,15 @@ def batch_combine_from_mapping(directory, mapping_path, output_dir=None):
     print("\n" + "=" * 60)
     print("BATCH COMBINE FROM MAPPING CSV")
     print("=" * 60)
+
+    # Auto-detect raw/ subdir if the user passed the project root instead of raw/ directly
+    raw_subdir = os.path.join(os.path.abspath(directory), 'raw')
+    if os.path.isdir(raw_subdir):
+        directory = raw_subdir
+        print(f"\n  Raw files dir   : {directory} (raw/ auto-detected)")
+    else:
+        directory = os.path.abspath(directory)
+        print(f"\n  Raw files dir   : {directory}")
 
     # Read mapping CSV (suppress internal prints)
     with contextlib.redirect_stdout(io.StringIO()):
@@ -1080,13 +1112,18 @@ if __name__ == "__main__":
 
         elif args and args.batch_combine:
             # Batch-combine mode (CLI)
-            if not args.mapping:
-                print("ERROR: --batch-combine requires --mapping <path-to-mapping-csv>")
-                sys.exit(1)
+            mapping_path = getattr(args, 'mapping', None)
+            if not mapping_path:
+                mapping_path = _find_mapping_csv(args.batch_combine)
+                if mapping_path:
+                    print(f"Mapping CSV auto-detected: {os.path.basename(mapping_path)}")
+                else:
+                    print("ERROR: --mapping not provided and no mapping CSV could be auto-detected.")
+                    sys.exit(1)
             out_dir = args.output if args.output else None
             if out_dir and not os.path.exists(out_dir):
                 os.makedirs(out_dir)
-            batch_combine_from_mapping(args.batch_combine, args.mapping, output_dir=out_dir)
+            batch_combine_from_mapping(args.batch_combine, mapping_path, output_dir=out_dir)
             sys.exit(0)
 
         elif args and args.flatten:
