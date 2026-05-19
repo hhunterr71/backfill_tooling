@@ -69,3 +69,4 @@ Thumbs.db
 
 # Configuration files with secrets
 .api_key
+.field_map_path
