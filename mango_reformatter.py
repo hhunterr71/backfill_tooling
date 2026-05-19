@@ -5,6 +5,8 @@ import sys
 import pytz
 import csv
 import shutil
+import io
+import contextlib
 
 def format_timestamps(df):
     """
@@ -196,10 +198,10 @@ def detect_meter_name(columns):
 
     if is_electrical and not is_utility:
         type_prefix = 'power-meter-'
-        print(f"  Detected meter type: electrical (prefix: '{type_prefix}')")
+        # print(f"  Detected meter type: electrical (prefix: '{type_prefix}')")
     elif is_utility and not is_electrical:
         type_prefix = 'utility-'
-        print(f"  Detected meter type: gas/water (prefix: '{type_prefix}')")
+        # print(f"  Detected meter type: gas/water (prefix: '{type_prefix}')")
     else:
         # Ambiguous or unrecognized - prompt user
         print(f"  Could not auto-detect meter type from point names: {[col.split(' - ', 1)[1].strip() for col in columns if col != 'timestamp' and ' - ' in col]}")
@@ -217,8 +219,8 @@ def read_mapping_csv(mapping_path):
     """
     Read and validate a mapping CSV that drives batch-combine processing.
 
-    Expected columns: building, meter_name, start_date, end_date
-    Optional column: externalID (filled with empty string if absent)
+    Expected columns: building_id, meter_name, start_date, end_date
+    Optional column: external_id (filled with empty string if absent)
 
     Args:
         mapping_path: Path to the mapping CSV file
@@ -235,15 +237,15 @@ def read_mapping_csv(mapping_path):
     except Exception as e:
         raise ValueError(f"Failed to read mapping CSV: {e}")
 
-    required = {'building', 'meter_name', 'start_date', 'end_date'}
+    required = {'building_id', 'meter_name', 'start_date', 'end_date'}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Mapping CSV is missing required columns: {missing}")
 
-    if 'externalID' not in df.columns:
-        df['externalID'] = ''
+    if 'external_id' not in df.columns:
+        df['external_id'] = ''
 
-    rows = df[['building', 'meter_name', 'externalID', 'start_date', 'end_date']].to_dict('records')
+    rows = df[['building_id', 'meter_name', 'external_id', 'start_date', 'end_date']].to_dict('records')
     print(f"  Loaded {len(rows)} mapping row(s) from: {os.path.basename(mapping_path)}")
     return rows
 
@@ -588,6 +590,11 @@ def flatten_and_rename_directory(root_dir):
     print(f"  Files in subdirectories : {len(subdir_files)}")
     print(f"  Files at root level     : {len(root_files)}")
 
+    # Create raw/ destination directory
+    raw_dir = os.path.join(root_dir, 'raw')
+    os.makedirs(raw_dir, exist_ok=True)
+    print(f"\nCreated destination: {raw_dir}")
+
     # Determine zero-pad width (at least 3 digits)
     width = max(3, len(str(total)))
 
@@ -596,25 +603,18 @@ def flatten_and_rename_directory(root_dir):
     counter = 1
 
     for source in all_files:
-        # Find the next free slot (dest might already exist if a root file happens
-        # to be named mango_export_XXX.csv from a previous run)
+        # Find the next free slot in raw/
         while True:
             new_name = f"mango_export_{counter:0{width}d}.csv"
-            dest = os.path.join(root_dir, new_name)
-            # Skip the slot if it's occupied by a file we haven't processed yet
-            if not os.path.exists(dest) or os.path.normpath(dest) == os.path.normpath(source):
+            dest = os.path.join(raw_dir, new_name)
+            if not os.path.exists(dest):
                 break
             counter += 1
 
         original_display = os.path.relpath(source, root_dir)
-
-        if os.path.normpath(source) == os.path.normpath(dest):
-            print(f"  Already named correctly : {new_name}")
-        else:
-            shutil.move(source, dest)
-            print(f"  Moved: {original_display}  ->  {new_name}")
-            moved += 1
-
+        shutil.move(source, dest)
+        print(f"  Moved: {original_display}  ->  raw/{new_name}")
+        moved += 1
         counter += 1
 
     # Remove subdirectories bottom-up
@@ -623,8 +623,9 @@ def flatten_and_rename_directory(root_dir):
     failed_dirs = []
 
     for dirpath, dirnames, filenames in os.walk(root_dir, topdown=False):
-        if os.path.normpath(dirpath) == os.path.normpath(root_dir):
-            continue  # Never remove root itself
+        norm = os.path.normpath(dirpath)
+        if norm == os.path.normpath(root_dir) or norm == os.path.normpath(raw_dir):
+            continue  # Never remove root or the new raw/ destination
         try:
             os.rmdir(dirpath)
             print(f"  Removed: {os.path.relpath(dirpath, root_dir)}/")
@@ -682,106 +683,120 @@ def batch_combine_from_mapping(directory, mapping_path, output_dir=None):
     Batch-combine workflow: detect meter names from a flat directory of raw CSV files,
     match against a mapping CSV, and for each mapping row combine + trim + reformat the data.
 
-    Mapping CSV columns: building, meter_name, externalID (optional), start_date, end_date
+    Mapping CSV columns: building_id, meter_name, external_id (optional), start_date, end_date
     Output: one reformatted CSV per mapping row, named:
-        {building}_{meter_name}_{externalID}_{start_date}_{end_date}_mango.csv
-        (externalID segment omitted if empty)
+        {building_id}_{meter_name}_{external_id}_{start_date}_{end_date}_mango.csv
+        (external_id segment omitted if empty)
 
     Args:
         directory: Path to flat directory of raw Mango CSV files
         mapping_path: Path to the mapping CSV file
-        output_dir: Directory to write output files (defaults to input directory)
+        output_dir: Directory to write output files (defaults to sibling 'combined/' directory)
     """
     print("\n" + "=" * 60)
     print("BATCH COMBINE FROM MAPPING CSV")
     print("=" * 60)
 
-    # Step 1: Read mapping CSV
-    print("\n[1/5] Reading mapping CSV...")
-    mapping_rows = read_mapping_csv(mapping_path)
+    # Read mapping CSV (suppress internal prints)
+    with contextlib.redirect_stdout(io.StringIO()):
+        mapping_rows = read_mapping_csv(mapping_path)
+    print(f"\n  Mapping CSV     : {len(mapping_rows)} row(s) loaded")
 
-    # Step 2: Scan directory for CSV files
-    print("\n[2/5] Scanning directory for CSV files...")
-    csv_files = get_csv_files_from_directory(directory)
+    # Scan directory (suppress internal prints)
+    with contextlib.redirect_stdout(io.StringIO()):
+        csv_files = get_csv_files_from_directory(directory)
     if not csv_files:
         raise ValueError(f"No CSV files found in directory: {directory}")
+    print(f"  Raw files       : {len(csv_files)} CSV file(s) found")
 
-    # Step 3: Group files by detected meter name (reads headers only)
-    print("\n[3/5] Detecting meter names and grouping files...")
-    meter_groups = group_files_by_meter(csv_files)
+    # Group files by detected meter name (suppress per-file detection noise)
+    with contextlib.redirect_stdout(io.StringIO()):
+        meter_groups = group_files_by_meter(csv_files)
+    print(f"  Meter groups    : {len(meter_groups)} detected")
+    for name, files in meter_groups.items():
+        print(f"    '{name}': {len(files)} file(s)")
 
-    # Step 4: Combine files once per unique meter_name referenced in the mapping
-    print("\n[4/5] Combining files per meter...")
+    # Combine files once per unique meter referenced in the mapping
     unique_meters = list(dict.fromkeys(row['meter_name'] for row in mapping_rows))
     combined_by_meter = {}
+    combine_errors = {}
 
+    print(f"  Combining       : ", end='', flush=True)
     for meter_name in unique_meters:
         files = meter_groups.get(meter_name)
         if not files:
-            print(f"  WARNING: No files detected for meter '{meter_name}' — skipping all mapping rows for this meter")
+            combine_errors[meter_name] = "no matching files detected in directory"
             continue
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                dfs = [pd.read_csv(f) for f in files if validate_mango_csv(f)]
+            if not dfs:
+                combine_errors[meter_name] = "no files passed validation"
+                continue
+            combined = pd.concat(dfs, ignore_index=True)
+            combined = combined.drop_duplicates(subset=['timestamp'], keep='first')
+            combined = combined.sort_values('timestamp').reset_index(drop=True)
+            combined_by_meter[meter_name] = combined
+        except Exception as e:
+            combine_errors[meter_name] = str(e)
+    print(f"{len(combined_by_meter)}/{len(unique_meters)} meter(s) ready")
+    for meter_name, err in combine_errors.items():
+        print(f"    WARNING '{meter_name}': {err}")
 
-        print(f"\n  Combining {len(files)} file(s) for '{meter_name}'...")
-        dfs = []
-        for filepath in files:
-            if validate_mango_csv(filepath):
-                dfs.append(pd.read_csv(filepath))
+    # Determine output directory
+    if output_dir:
+        out_dir = output_dir
+    else:
+        parent_dir = os.path.dirname(os.path.abspath(directory))
+        out_dir = os.path.join(parent_dir, 'combined')
+    os.makedirs(out_dir, exist_ok=True)
+    print(f"  Output dir      : {out_dir}")
 
-        if not dfs:
-            print(f"  WARNING: No valid files for '{meter_name}' — skipping")
-            continue
-
-        combined = pd.concat(dfs, ignore_index=True)
-        before = len(combined)
-        combined = combined.drop_duplicates(subset=['timestamp'], keep='first')
-        combined = combined.sort_values('timestamp').reset_index(drop=True)
-        print(f"  Combined: {len(combined)} rows ({before - len(combined)} duplicates removed)")
-        combined_by_meter[meter_name] = combined
-
-    # Step 5: Process each mapping row
-    print("\n[5/5] Processing mapping rows...")
-    out_dir = output_dir if output_dir else os.path.dirname(os.path.abspath(csv_files[0]))
+    # Process each mapping row — print one SUCCESS/FAIL line per row
+    pad = len(str(len(mapping_rows)))
+    print(f"\n  Processing {len(mapping_rows)} mapping row(s):")
 
     created = 0
     skipped = 0
 
     for idx, row in enumerate(mapping_rows, 1):
         meter_name = row['meter_name']
-        building = row['building']
-        external_id = row.get('externalID', '').strip()
+        building = row['building_id']
+        external_id = row.get('external_id', '').strip()
         start_date = row['start_date'].strip()
         end_date = row['end_date'].strip()
 
-        print(f"\n  [{idx}/{len(mapping_rows)}] {meter_name} | {start_date} to {end_date}" +
-              (f" | externalID={external_id}" if external_id else ""))
+        ext_display = f"  [{external_id}]" if external_id else ""
+        label = f"    [{idx:>{pad}}/{len(mapping_rows)}] {meter_name}  {start_date} -> {end_date}{ext_display}"
 
-        if meter_name not in combined_by_meter:
-            print(f"    Skipping (no combined data for this meter)")
+        try:
+            if meter_name not in combined_by_meter:
+                raise ValueError(combine_errors.get(meter_name, "no combined data available"))
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                df = trim_to_date_window(combined_by_meter[meter_name].copy(), start_date, end_date)
+
+            if df.empty:
+                raise ValueError(f"no data found in date window {start_date} to {end_date}")
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                df = remove_rendered_columns(df)
+                df = rename_point_columns(df)
+                df = format_timestamps(df)
+                df = restructure_to_paired_columns(df)
+                df = add_metadata_columns(df, building, device=meter_name, external_id=external_id)
+
+            ext_segment = f"_{external_id}" if external_id else ""
+            output_filename = f"{building}_{meter_name}{ext_segment}_{start_date}_{end_date}_mango.csv"
+            output_path = os.path.join(out_dir, output_filename)
+            df.to_csv(output_path, index=False, quoting=csv.QUOTE_NONNUMERIC, float_format='%.10g')
+
+            print(f"{label}  ->  SUCCESS  ({len(df)} rows)")
+            created += 1
+
+        except Exception as e:
+            print(f"{label}  ->  FAIL: {e}")
             skipped += 1
-            continue
-
-        # Trim to date window
-        df = trim_to_date_window(combined_by_meter[meter_name].copy(), start_date, end_date)
-        if df.empty:
-            print(f"    Skipping (no data in date window)")
-            skipped += 1
-            continue
-
-        # Run the full reformatting pipeline
-        df = remove_rendered_columns(df)
-        df = rename_point_columns(df)
-        df = format_timestamps(df)
-        df = restructure_to_paired_columns(df)
-        df = add_metadata_columns(df, building, device=meter_name, external_id=external_id)
-
-        # Build output filename
-        ext_segment = f"_{external_id}" if external_id else ""
-        output_filename = f"{building}_{meter_name}{ext_segment}_{start_date}_{end_date}_mango.csv"
-        output_path = os.path.join(out_dir, output_filename)
-
-        df.to_csv(output_path, index=False, quoting=csv.QUOTE_NONNUMERIC, float_format='%.10g')
-        print(f"    Saved: {output_filename}  ({len(df)} rows)")
-        created += 1
 
     # Summary
     print("\n" + "=" * 60)
