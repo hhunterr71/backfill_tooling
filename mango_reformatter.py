@@ -143,7 +143,7 @@ def add_metadata_columns(df, building, device, external_id):
     print(f"Added metadata: building={building}, device={device}, externalID={external_id if external_id else '(none)'}")
     return df
 
-def detect_meter_name(columns):
+def detect_meter_name(columns, no_prompt=False):
     """
     Detect meter name from column names formatted as 'meter_name - pointName'.
     Prepends 'power-meter-' for electrical meters or 'utility-' for gas/water meters
@@ -155,6 +155,7 @@ def detect_meter_name(columns):
 
     Args:
         columns: List of column names
+        no_prompt: If True, return None instead of prompting when meter type is ambiguous
     Returns:
         Detected meter name string with type prefix, or None if raw name not detectable
     """
@@ -203,8 +204,12 @@ def detect_meter_name(columns):
         type_prefix = 'utility-'
         # print(f"  Detected meter type: gas/water (prefix: '{type_prefix}')")
     else:
-        # Ambiguous or unrecognized - prompt user
-        print(f"  Could not auto-detect meter type from point names: {[col.split(' - ', 1)[1].strip() for col in columns if col != 'timestamp' and ' - ' in col]}")
+        # Ambiguous or unrecognized
+        point_list = [col.split(' - ', 1)[1].strip() for col in columns if col != 'timestamp' and ' - ' in col]
+        if no_prompt:
+            print(f"  WARNING: Could not auto-detect meter type for '{raw_name}' from point names: {point_list}. Skipping.")
+            return None
+        print(f"  Could not auto-detect meter type from point names: {point_list}")
         print("  Select meter type:")
         print("    1. Electrical (power-meter-)")
         print("    2. Gas / Water (utility-)")
@@ -250,19 +255,20 @@ def read_mapping_csv(mapping_path):
     return rows
 
 
-def detect_meter_name_from_file(filepath):
+def detect_meter_name_from_file(filepath, interactive=True):
     """
     Detect the meter name from a CSV file by reading only its headers.
     Uses nrows=0 to avoid loading the full file.
 
     Args:
         filepath: Path to CSV file
+        interactive: If False, return None for ambiguous meter types instead of prompting
     Returns:
         Detected meter name string with type prefix, or None if not detectable
     """
     try:
         df_headers = pd.read_csv(filepath, nrows=0)
-        return detect_meter_name(list(df_headers.columns))
+        return detect_meter_name(list(df_headers.columns), no_prompt=not interactive)
     except Exception as e:
         print(f"  WARNING: Could not read headers from {os.path.basename(filepath)}: {e}")
         return None
@@ -541,12 +547,15 @@ def combine_mango_csv_files(directory, building, meter_name=None, output_dir=Non
 
 def flatten_and_rename_directory(root_dir):
     """
-    Flatten all subdirectories in root_dir by moving every CSV file into root_dir,
-    renaming each file to mango_export_001.csv, mango_export_002.csv, etc.
-    Subdirectories are deleted after their CSVs are moved (only if empty).
+    Flatten all subdirectories in root_dir by moving every CSV file into a raw/
+    subdirectory, renaming each file to {meter_name}_{counter}_mango_export.csv.
+    The meter name is auto-detected from each file's column headers; files whose
+    meter cannot be determined are renamed unknown_{counter}_mango_export.csv.
+    The counter resets per meter group (001, 002, …). Subdirectories are deleted
+    after their CSVs are moved (only if empty).
 
     Processing order: subdirectory files first (sorted by path), then any files
-    already at root level — so root-level files get the highest numbers.
+    already at root level.
 
     Args:
         root_dir: Path to the root directory to flatten
@@ -595,27 +604,45 @@ def flatten_and_rename_directory(root_dir):
     os.makedirs(raw_dir, exist_ok=True)
     print(f"\nCreated destination: {raw_dir}")
 
-    # Determine zero-pad width (at least 3 digits)
-    width = max(3, len(str(total)))
+    # --- First pass: detect meter name for every file (non-interactively) ---
+    print(f"\nDetecting meter names from file headers...")
+    meter_for_file = {}
+    for source in all_files:
+        name = detect_meter_name_from_file(source, interactive=False)
+        meter_for_file[source] = name if name else "unknown"
 
+    # Summarize detected groups
+    from collections import Counter as _Counter
+    meter_counts = _Counter(meter_for_file.values())
+    for meter, count in sorted(meter_counts.items()):
+        print(f"  {meter}: {count} file(s)")
+
+    # Per-meter zero-pad widths and counters
+    meter_widths = {m: max(3, len(str(c))) for m, c in meter_counts.items()}
+    meter_counter = {m: 1 for m in meter_counts}
+
+    # --- Second pass: move and rename ---
     print(f"\nMoving and renaming files...")
     moved = 0
-    counter = 1
 
     for source in all_files:
-        # Find the next free slot in raw/
-        while True:
-            new_name = f"mango_export_{counter:0{width}d}.csv"
+        meter = meter_for_file[source]
+        w = meter_widths[meter]
+        c = meter_counter[meter]
+        new_name = f"{meter}_{c:0{w}d}_mango_export.csv"
+        dest = os.path.join(raw_dir, new_name)
+        # Guard against unlikely collision
+        while os.path.exists(dest):
+            meter_counter[meter] += 1
+            c = meter_counter[meter]
+            new_name = f"{meter}_{c:0{w}d}_mango_export.csv"
             dest = os.path.join(raw_dir, new_name)
-            if not os.path.exists(dest):
-                break
-            counter += 1
 
         original_display = os.path.relpath(source, root_dir)
         shutil.move(source, dest)
         print(f"  Moved: {original_display}  ->  raw/{new_name}")
         moved += 1
-        counter += 1
+        meter_counter[meter] += 1
 
     # Remove subdirectories bottom-up
     print(f"\nRemoving subdirectories...")
