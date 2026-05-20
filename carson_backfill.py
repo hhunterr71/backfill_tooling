@@ -362,8 +362,10 @@ def read_mapping_csv(mapping_path):
         df['type'] = ''
     if 'bug_number' not in df.columns:
         df['bug_number'] = ''
+    if 'format' not in df.columns:
+        df['format'] = ''
     rows = df[['building_id', 'meter_name', 'external_id', 'type', 'bug_number',
-               'start_date', 'end_date']].to_dict('records')
+               'format', 'start_date', 'end_date']].to_dict('records')
     print(f"  Loaded {len(rows)} mapping row(s) from: {os.path.basename(mapping_path)}")
     return rows
 
@@ -727,6 +729,7 @@ def batch_combine_from_mapping(directory, mapping_path, output_dir=None):
         external_id = row.get('external_id', '').strip()
         meter_type = row.get('type', '').strip().upper() or None  # 'EM', 'WM', 'GM', or None
         bug_number = row.get('bug_number', '').strip()
+        meter_format = row.get('format', '').strip().lower()  # 'udmi' or 'legacy'
         start_date = row['start_date'].strip()
         end_date = row['end_date'].strip()
 
@@ -766,7 +769,7 @@ def batch_combine_from_mapping(directory, mapping_path, output_dir=None):
 
             meta_path = output_path.replace('.csv', '.meta')
             with open(meta_path, 'w') as mf:
-                json.dump({'type': meter_type or '', 'bug_number': bug_number}, mf)
+                json.dump({'type': meter_type or '', 'bug_number': bug_number, 'format': meter_format}, mf)
 
             print(f"{label}  ->  SUCCESS  ({len(df)} rows)")
             created += 1
@@ -862,7 +865,7 @@ def convert_paired_to_flat(df):
     return flat_df
 
 
-def pivot_flat_file(input_path, outputdirname, meter_type=None, field_map=None, bug_number=''):
+def pivot_flat_file(input_path, outputdirname, meter_type=None, field_map=None, bug_number='', fmt=''):
     """
     Pivot a flat or paired CSV/XLSX file and write per-device output folders.
     Each output folder contains:
@@ -960,7 +963,8 @@ def pivot_flat_file(input_path, outputdirname, meter_type=None, field_map=None, 
             logger.info('Output Unit File Path: ' + output_unit_path)
 
             device_num_id_value = str(external_id) if external_id is not None else ''
-            command_template = (
+
+            udmi_cmd = (
                 f'admin_session --reason="b/{bug_number}" -- \\\n'
                 f'blaze run \\\n'
                 f'java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- \\\n'
@@ -968,10 +972,37 @@ def pivot_flat_file(input_path, outputdirname, meter_type=None, field_map=None, 
                 f'--unit_file="{output_unit_path}" --device_num_id={device_num_id_value} \\\n'
                 f'--environment=prod'
             )
+            legacy_cmd = (
+                f'admin_session --reason="b/{bug_number}" -- \\\n'
+                f'blaze run \\\n'
+                f'java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- \\\n'
+                f'--mode="populate" --data_file="{output_path}" \\\n'
+                f'--unit_file="{output_unit_path}" --device_num_id={device_num_id_value} \\\n'
+                f'--data_field_name="points" --present_value_field_name="present_value" \\\n'
+                f'--environment=prod'
+            )
+
+            is_legacy = (fmt.lower() == 'legacy')
+            active_cmd   = legacy_cmd if is_legacy else udmi_cmd
+            active_label = 'LEGACY' if is_legacy else 'UDMI'
+            alt_cmd      = udmi_cmd if is_legacy else legacy_cmd
+            alt_label    = 'UDMI' if is_legacy else 'LEGACY'
+
+            separator = (
+                '\n\n'
+                '# ============================================================\n'
+                f'# REFERENCE — {alt_label} (do not run — edit active block above if needed)\n'
+                '# ============================================================\n\n'
+            )
 
             run_command_path = os.path.join(newpath, 'run_command.txt')
             with open(run_command_path, 'w') as cmd_file:
-                cmd_file.write(command_template)
+                cmd_file.write(f'# {active_label} (active)\n')
+                cmd_file.write(active_cmd)
+                cmd_file.write(separator)
+                cmd_file.write(f'# {alt_label} (reference)\n')
+                cmd_file.write(alt_cmd)
+                cmd_file.write('\n')
             logger.info('Run Command File Path: ' + run_command_path)
 
             unmatched_units = unit_table[unit_table['Units'].isnull()]
@@ -1068,10 +1099,10 @@ def setup_job(parent_dir, job_name):
     mapping_template_path = os.path.join(job_dir, f"{job_name}_mapping_template.csv")
     with open(mapping_template_path, 'w', newline='') as f:
         writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-        writer.writerow(['building_id', 'meter_name', 'external_id', 'type', 'bug_number', 'start_date', 'end_date'])
+        writer.writerow(['building_id', 'meter_name', 'external_id', 'type', 'bug_number', 'format', 'start_date', 'end_date'])
         writer.writerow([
             'US-MFA-BUILDING', 'power-meter-MAIN_METER', '1743694964149',
-            'EM', '123456789', '2025-01-01', '2025-12-31',
+            'EM', '123456789', 'udmi', '2025-01-01', '2025-12-31',
         ])
     print(f"  Created: {os.path.join(job_name, os.path.basename(mapping_template_path))}")
 
@@ -1149,11 +1180,12 @@ def process_combined_dir(combined_dir, output_dir):
 
         meter_type = meta.get('type') or None
         bug_number = meta.get('bug_number') or ''
+        meter_format = meta.get('format') or ''
         effective_field_map = field_map if (field_map and meter_type) else None
 
         try:
             pivot_flat_file(filepath, output_dir, meter_type=meter_type,
-                            field_map=effective_field_map, bug_number=bug_number)
+                            field_map=effective_field_map, bug_number=bug_number, fmt=meter_format)
             successful += 1
             print(f"  Done")
         except Exception as e:
@@ -1206,7 +1238,13 @@ def run_output_dir(output_dir, blaze_cwd):
         with open(run_cmd_path, 'r', encoding='utf-8') as f:
             contents = f.read()
 
-        cmd_str = contents.strip()
+        # Extract only the first (active) command block — everything before the separator
+        cmd_str = contents.split('# ===')[0].strip()
+        # Strip leading comment line (e.g. "# UDMI (active)")
+        lines = cmd_str.splitlines()
+        if lines and lines[0].startswith('#'):
+            lines = lines[1:]
+        cmd_str = '\n'.join(lines).strip()
         if not cmd_str:
             print(f"\n[{idx}/{len(folders_to_run)}] SKIPPED '{folder_name}': run_command.txt is empty")
             run_results.append((folder_name, 'skipped', None))
