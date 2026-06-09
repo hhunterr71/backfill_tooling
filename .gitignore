@@ -67,6 +67,5 @@ Thumbs.db
 # Project-specific
 *.log
 
-# Configuration files with secrets
-.api_key
+# Configuration files with local paths
 .field_map_path
