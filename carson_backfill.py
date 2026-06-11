@@ -1072,7 +1072,7 @@ def setup_job(parent_dir, job_name):
         os.makedirs(d, exist_ok=True)
         print(f"  Created: {os.path.join(job_name, subdir)}/")
 
-    mapping_template_path = os.path.join(job_dir, f"{job_name}_mapping_template.csv")
+    mapping_template_path = os.path.join(job_dir, "meter_mapping.csv")
     with open(mapping_template_path, 'w', newline='') as f:
         writer = csv.writer(f, quoting=csv.QUOTE_ALL)
         writer.writerow(['building_id', 'meter_name', 'technical_id', 'external_id', 'type', 'bug_number', 'start_date', 'end_date'])
