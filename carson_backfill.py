@@ -972,6 +972,7 @@ def pivot_flat_file(input_path, outputdirname, meter_type=None, field_map=None, 
                 f'java/com/google/corp/bizapps/rews/datalake/tools/backfill:backfill_tool -- \\\n'
                 f'--mode="populate" --data_file="{output_path}" \\\n'
                 f'--unit_file="{output_unit_path}" --device_num_id={device_num_id_value} \\\n'
+                f'--data_field_name="points" --present_value_field_name="present_value" \\\n'
                 f'--environment=prod'
             )
 
